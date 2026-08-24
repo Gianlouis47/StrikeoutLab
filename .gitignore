@@ -361,3 +361,28 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# StrikeoutLab (TypeScript / Supabase / Expo)
+#
+# The NuGet "**/[Pp]ackages/*" rule above (line ~200, from the .NET
+# template this .gitignore started from) would otherwise swallow our
+# entire npm workspace at packages/core. Un-ignore only its real source
+# files (not a blanket **, which would also re-include any node_modules/
+# or build cache a tool creates inside packages/core).
+!packages/
+!packages/core/
+!packages/core/src/
+!packages/core/src/**
+!packages/core/test/
+!packages/core/test/**
+!packages/core/package.json
+!packages/core/tsconfig.json
+
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.expo/
+.eas/
+supabase/.temp/

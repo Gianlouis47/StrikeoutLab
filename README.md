@@ -1,15 +1,15 @@
 # StrikeoutLab
 
-Herramienta de cálculo determinista para análisis de props de ponches
+App móvil personal + backend en la nube para análisis de props de ponches
 (strikeouts) de lanzadores MLB, usada en apuestas en banca física
 dominicana (Star Sport, Lajara Sport).
 
 **El sistema calcula, no adivina.** No predice ponches ni genera
 confianzas por sí solo — reporta lo que pasó en salidas anteriores, y
-audita si las confianzas asignadas (por un humano o por un modelo de
-lenguaje) se sostienen contra los resultados reales. Si después de 50-100
-picks la calibración muestra que las confianzas no se sostienen, ese es un
-resultado válido del sistema, no un fallo del código.
+audita si las confianzas asignadas (por vos o por la IA) se sostienen
+contra los resultados reales. Si después de 50-100 picks la calibración
+muestra que las confianzas no se sostienen, ese es un resultado válido del
+sistema, no un fallo del código.
 
 El problema que resuelve: este análisis se ha hecho a mano/mentalmente y
 ha producido errores aritméticos repetidos y verificados — confianzas
@@ -18,196 +18,174 @@ comparar totales de ponches entre equipos en vez de tasas; no calcular la
 probabilidad combinada real de un parlay antes de apostar. StrikeoutLab
 elimina esos tres errores por construcción.
 
-## Estructura
+## Arquitectura
 
 ```
-src/
-  calculations.py   # funciones puras: tasas, reglas de empate, parlay, etc.
-  calibration.py    # auditoría de calibración y resumen económico
-  cli.py            # interfaz de línea de comandos sobre data/*.csv
-tests/
-  test_calculations.py
-  test_calibration.py
-data/
-  picks.csv         # un registro por pick emitido (ver "Modelo de datos")
-  game_logs.csv     # historial real de salidas de cada lanzador
-  team_k.csv        # ponches/PA por equipo, por ventana de tiempo
-docs/framework/
-  00-16...          # el criterio cualitativo (sharp/sindicato) que produce
-                     # las confianzas de tipo JUICIO; ver nota abajo
+packages/core/       # Lógica pura (TypeScript): tasas, reglas de empate,
+                      # calibración, parlay. Sin IO. 35 tests (vitest).
+supabase/
+  migrations/         # Esquema de la base de datos (Postgres en Supabase)
+  functions/
+    analizar-pitcher/ # Edge Function: tasa CALCULADA real + opinión JUICIO
+                      # de la IA, informada por tu historial de calibración
+    analizar-foto/    # Edge Function: lee un ticket/captura con visión IA
+apps/mobile/          # App Expo (React Native + TypeScript), solo para vos
+docs/framework/       # Criterio cualitativo (sharp/sindicato) que sigue la
+                      # IA — el "manual" detrás de fuente_confianza=JUICIO
 ```
 
-## Instalación
+**Por qué Supabase y no Neon:** se evaluó Neon, pero el entorno donde se
+construyó este proyecto tenía bloqueado por política de red todo el
+dominio `neon.tech`. Supabase sí es alcanzable y ya estaba conectado a la
+cuenta, así que es el backend real (Postgres administrado, con Auth,
+Storage y Edge Functions incluidos).
+
+**Proyecto Supabase:** `strikeoutlab` (`xuebtkafypivqygyqgcv`, región
+`us-east-1`), plan gratuito.
+
+## Modelo de datos (Postgres)
+
+Mismas tablas que el diseño original en CSV, ahora con las reglas de
+negocio críticas aplicadas *en la base de datos*, no solo en el código:
+
+- **`picks`** — un registro por pick. `resultado` (`GANO`/`PERDIO`/`EMPATE`)
+  se deriva automáticamente por un trigger a partir de `resultado_k`,
+  `linea` y `pick` — **nunca se puede escribir a mano, ni por error**. Un
+  empate en línea entera nunca colapsa en `GANO` ni `PERDIO`.
+- **`game_logs`** — historial real de salidas de cada lanzador (`ip` en
+  notación de béisbol: 5.1 = 5 entradas y 1 out).
+- **`team_k`** — ponches/PA por equipo y ventana (`TEMPORADA` /
+  `ULTIMOS_14`), para comparar por tasa y no por total.
+- **`learning_log`** — la bitácora de aprendizaje del framework (antes un
+  archivo markdown), ahora una tabla viva.
+- **`analisis_fotos`** — lo que la IA de visión extrae de cada foto
+  analizada (reservado para cuando se conecte Storage; hoy la Edge
+  Function solo devuelve el JSON extraído, no lo persiste todavía).
+
+RLS está activo en las cinco tablas: solo una sesión autenticada de
+Supabase Auth puede leer o escribir. El `publishable key` va empacado en
+la app (es público por diseño); la protección real es esa.
+
+## La IA y el "aprendizaje"
+
+`analizar-pitcher` no reentrena ningún modelo. En cada llamada:
+
+1. Calcula la tasa real (`CALCULADA`) sobre el historial en `game_logs`.
+2. Lee tu historial real de calibración (`reporteCalibracion` sobre tus
+   picks `JUICIO` ya resueltos) y se lo pasa a la IA como contexto: *"en
+   la banda 80-84% has acertado 55% de las veces"*.
+3. Le pide a NVIDIA NIM (modelo configurable, ver abajo) un veredicto
+   `JUICIO`, obligado a ajustar su confianza según ese historial real.
+
+Eso es el "aprendizaje": evidencia real inyectada en el contexto de cada
+llamada, no un modelo que cambia sus pesos. La API key de NVIDIA vive
+únicamente como secret de Supabase (Edge Function) — nunca en la app.
+
+## Configuración
+
+### 1. Instalar dependencias y correr los tests de `packages/core`
 
 ```bash
-pip install -r requirements.txt
+npm install
+npm test    # 35 tests, lógica pura de cálculo y calibración
+npm run build --workspace packages/core
 ```
 
-Requiere Python 3.11+ (usa `list[dict]`, `float | None`, etc.).
+### 2. Secret de NVIDIA (obligatorio para que la IA responda)
 
-## Uso
+Necesitás una API key de [build.nvidia.com](https://build.nvidia.com) (ya
+tenés acceso a sus 80+ modelos gratis). Configurala como secret de las
+Edge Functions — **nunca la pegues en el código ni en la app**:
 
-Todos los comandos leen y escriben los CSV en `data/`; se pueden abrir y
-editar a mano en cualquier momento.
+- Dashboard de Supabase → tu proyecto → Edge Functions → Secrets → agregar
+  `NVIDIA_API_KEY`.
+- O con la CLI de Supabase (desde tu computadora):
+  `supabase secrets set NVIDIA_API_KEY=tu_key --project-ref xuebtkafypivqygyqgcv`
+
+Opcional: `NVIDIA_MODEL_TEXTO` (default `meta/llama-3.3-70b-instruct`) y
+`NVIDIA_MODEL_VISION` (default `meta/llama-3.2-90b-vision-instruct`) si
+querés usar otros modelos del catálogo de NVIDIA.
+
+### 3. Crear tu cuenta (la app es de un solo usuario)
+
+Abrí la app y usá "No tengo cuenta todavía" para crear tu usuario con
+email/contraseña (Supabase Auth). Si tu proyecto pide confirmación por
+correo, revisá tu email antes de entrar.
+
+### 4. Correr la app móvil
 
 ```bash
-# Registrar un pick nuevo (queda con resultado pendiente)
-python -m src.cli pick-add \
-  --fecha 2026-08-24 --codigo 025 --pitcher "Gerrit Cole" \
-  --equipo NYY --rival BOS --linea 5.5 --pick OVER \
-  --confianza 0.82 --nivel ORO --fuente-confianza CALCULADA
-
-# Registrar el resultado real cuando termine el juego
-python -m src.cli resultado-set --pitcher "Gerrit Cole" --fecha 2026-08-24 --k 6
-
-# Tasa real de superación de línea, usando el historial en game_logs.csv
-python -m src.cli tasa --pitcher "Gerrit Cole" --linea 5.5 --pick OVER --n 10
-
-# Pitcheos por entrada (None si falta el dato en alguna salida)
-python -m src.cli pitcheos --pitcher "Gerrit Cole" --n 5
-
-# Ranking de rivales por TASA de ponches, nunca por total
-python -m src.cli rivales --ventana TEMPORADA
-
-# Probabilidad combinada de un parlay (asume independencia)
-python -m src.cli parlay --confianzas 0.85,0.9,0.83,0.88
-
-# Igual, pero verificando si dos patas son del mismo juego
-python -m src.cli parlay --confianzas 0.85,0.8 \
-  --patas "2026-08-24:NYY:BOS,2026-08-24:BOS:NYY"
-
-# Auditoría: ¿las confianzas declaradas se sostienen contra resultados reales?
-python -m src.cli calibracion
-
-# Resultado económico real (requiere columnas opcionales stake/payout)
-python -m src.cli economico
+cd apps/mobile
+cp .env.example .env   # ya viene con la URL/publishable key del proyecto
+npm install
+npx expo start
 ```
 
-## Modelo de datos
+Escaneá el QR con la app **Expo Go** (Android/iOS) desde tu teléfono.
+Nota: `expo-image-picker` se instaló con `npm install` en vez de
+`npx expo install` porque el entorno donde se construyó esto tenía
+bloqueado `api.expo.dev`; si Expo Go se queja de una versión
+incompatible, corré `npx expo install expo-image-picker` vos mismo desde
+tu computadora (sin esa restricción) para que ajuste la versión exacta.
 
-### `data/picks.csv`
-El archivo más importante del sistema. Un registro por pick emitido.
+Para tener la app instalada permanentemente en tu teléfono (sin depender
+de que el servidor de desarrollo esté corriendo), el siguiente paso es
+[EAS Build](https://docs.expo.dev/build/introduction/) — genera un
+instalable real. No se configuró en esta sesión; es la extensión natural
+cuando quieras "instalarla y ya".
 
-| Columna | Tipo | Descripción |
-|---|---|---|
-| `fecha` | date | Fecha del juego |
-| `codigo` | string | Código de la banca (ej. "025") |
-| `pitcher` | string | Nombre del lanzador |
-| `equipo` | string | Equipo del lanzador (abreviatura 3 letras) |
-| `rival` | string | Equipo rival (abreviatura 3 letras) |
-| `linea` | float | Línea de ponches (ej. 5.5, 7.0) |
-| `pick` | enum | `OVER` o `UNDER` |
-| `confianza` | float | Probabilidad asignada, 0.0-1.0 |
-| `nivel` | enum | `DIAMANTE`, `ORO_ALTO`, `ORO`, `IMPUREZA` |
-| `fuente_confianza` | enum | `CALCULADA` o `JUICIO` — ver nota abajo |
-| `resultado_k` | int, nullable | Ponches reales; vacío hasta que termine el juego |
-| `resultado` | enum, nullable | `GANO`, `PERDIO`, `EMPATE` — derivado, nunca a mano |
-| `ticket_id` | string, nullable | Agrupa picks del mismo ticket físico |
-| `stake` | float, nullable | Opcional: DOP apostado (ver `resumen_economico`) |
-| `payout` | float, nullable | Opcional: DOP cobrado si ganó/empató |
+## Pantallas de la app
 
-**`fuente_confianza` es el campo más importante del archivo.** El error
-más grave del sistema anterior fue mezclar confianzas calculadas con
-confianzas inventadas sin distinguirlas. `CALCULADA` significa que salió
-de `tasa_superacion_linea()`. `JUICIO` significa que un humano o un
-modelo de lenguaje la estimó (siguiendo el criterio en `docs/framework/`).
-El reporte de calibración siempre separa ambas categorías.
+- **Calibración** — confianza declarada vs. tasa real de acierto, por
+  banda, y resumen económico.
+- **Nuevo Pick** — formulario + botón para pedirle una opinión `JUICIO` a
+  la IA (informada por tu historial real) antes de guardar.
+- **Foto** — tomar/elegir una foto (ticket de Star Sport, captura de
+  stats, boxscore); la IA de visión extrae los datos y podés pasarlos
+  directo al formulario de Nuevo Pick.
+- **Historial** — picks recientes; tocá uno pendiente para registrar el
+  resultado real (K reales) — el `resultado` lo deriva la base de datos.
+- **Rivales** — ranking de equipos por tasa de ponches, nunca por total.
+- **Parlay** — probabilidad combinada real de un parlay, con advertencia
+  si dos patas son del mismo juego.
 
-Un resultado exactamente igual a una línea entera es `EMPATE`, nunca
-`GANO` ni `PERDIO` — en este consorcio se paga con un recorte de
-30-40% en vez de anular el ticket, así que colapsar el estado perdería
-información real.
+## Reglas de negocio (sin cambios respecto al diseño original)
 
-`stake`/`payout` son opcionales: si una boleta física agrupa varias patas
-bajo el mismo `ticket_id`, se asume que el monto está repetido de forma
-idéntica en cada fila de ese ticket (`resumen_economico` deduplica antes
-de sumar).
-
-### `data/game_logs.csv`
-
-| Columna | Tipo | Descripción |
-|---|---|---|
-| `pitcher` | string | Nombre del lanzador |
-| `fecha` | date | Fecha de la salida |
-| `rival` | string | Rival de esa salida |
-| `ip` | float | Entradas en notación de béisbol (5.1 = 5 y 1 out) |
-| `k` | int | Ponches |
-| `bb` | int | Bases por bola |
-| `pitcheos` | int, nullable | Total de pitcheos; frecuentemente no disponible |
-
-`ip` se guarda en notación de béisbol tal como aparece en el boxscore
-(5.1, 5.2, 6.0), **no** en decimal — `ip_a_decimal()` hace esa conversión
-donde se necesita.
-
-### `data/team_k.csv`
-
-| Columna | Tipo | Descripción |
-|---|---|---|
-| `equipo` | string | Abreviatura 3 letras |
-| `ventana` | enum | `TEMPORADA` o `ULTIMOS_14` |
-| `k` | int | Ponches totales |
-| `pa` | int | Apariciones al plato |
-| `fecha_corte` | date | Cuándo se tomó el dato |
-
-Los tres archivos empiezan solo con encabezados: StrikeoutLab nunca viene
-con datos de ejemplo inventados — cargar datos reales es responsabilidad
-de quien lo usa.
-
-## Reglas de negocio
-
-- **Líneas enteras y empates.** Un resultado igual a una línea entera es
-  `EMPATE`, un estado propio, nunca colapsado en `GANO` ni `PERDIO`.
-- **Muestra mínima.** `tasa_superacion_linea` con menos de 5 salidas
-  incluye una advertencia en su retorno: el margen de error es demasiado
-  grande para confiar en el porcentaje.
-- **Datos faltantes.** Nunca se estima, promedia ni rellena. Si falta el
-  conteo de pitcheos, `pitcheos_por_entrada` retorna `None`. Un hueco
-  explícito es preferible a un número inventado — el mismo principio
-  aplica en `resumen_economico`, que advierte en vez de reportar "0.00"
-  cuando nadie registró `stake`/`payout`.
-- **Independencia en parlays.** `probabilidad_parlay` asume independencia
-  entre patas (documentado en su docstring). `detectar_correlacion_mismo_juego`
-  es una función aparte que marca cuándo dos patas vienen del mismo juego
-  (ej. los dos abridores) y por lo tanto no son eventos independientes.
+- Un resultado igual a una línea entera es `EMPATE`, un estado propio,
+  nunca colapsado en `GANO` ni `PERDIO` — aplicado por trigger en Postgres.
+- Con menos de 5 salidas, `tasaSuperacionLinea` avisa que la muestra es
+  insuficiente. Con menos de 20 picks en una banda de confianza,
+  `reporteCalibracion` marca `muestraInsuficiente: true`.
+- Nunca se estima ni se rellena un dato faltante — un hueco explícito es
+  preferible a un número inventado (incluyendo el resumen económico:
+  avisa en vez de mostrar un "0.00" falso cuando no hay stake/payout
+  registrado).
+- `probabilidadParlay` asume independencia entre patas (documentado en su
+  código); `detectarCorrelacionMismoJuego` marca cuándo dos patas vienen
+  del mismo enfrentamiento.
 
 ## Qué NO hace este sistema
 
-- No predice ponches — reporta lo que pasó en salidas anteriores.
-- No genera confianzas por sí solo — un humano o un modelo las asigna; el
-  sistema solo las registra y las audita después.
-- No garantiza ganancias. Las casas cobran comisión en cada línea y esa
+- No predice ponches — reporta lo que pasó, y audita si las confianzas
+  (tuyas o de la IA) se sostienen.
+- No genera confianzas "de la nada" sin poder auditarlas después —
+  `fuente_confianza` (`CALCULADA` vs `JUICIO`) siempre queda registrado.
+- No garantiza ganancias. Las casas cobran comisión en cada línea, y esa
   ventaja se multiplica en parlays.
 
 ## `docs/framework/`
 
-Son 16 documentos de referencia (no código) que describen el criterio
-**cualitativo** — sharp/sindicato, específico de Star Sport — que un
-analista humano o un LLM sigue para llegar a un veredicto Over/Under/No
-Bet y una confianza `JUICIO`. `docs/framework/00_marco_transversal.md`
-contiene el marco compartido por los 16; cada archivo numerado agrega su
-enfoque específico (props de pitcher, matchup de lineup, Statcast,
-mercado/EV, sharp action, códigos y reglas de Star Sport, bankroll físico,
-etc.). StrikeoutLab es la "calculadora" que mantiene honesto ese criterio,
-registrando cada confianza y midiendo si se sostiene contra resultados
-reales.
-
-## Tests
-
-```bash
-pytest
-```
-
-Cubren, entre otros: los tres casos de conversión de `ip_a_decimal` (y el
-`ValueError` de `5.3`); los seis casos de `tasa_superacion_linea`
-(OVER/UNDER × línea .5/entera × gana/pierde/empata); el caso real donde un
-equipo con más ponches totales (136/488) tiene *menor* tasa que otro con
-menos (132/443); que 4 patas de 0.85 en un parlay den ≈0.52 y no 0.85; y
-que un empate en línea entera retorne `EMPATE`, no `PERDIO`.
+16 documentos de referencia (no código): el criterio cualitativo
+sharp/sindicato, específico de Star Sport, que la IA sigue para llegar a
+un veredicto y una confianza `JUICIO`. `00_marco_transversal.md` es el
+marco compartido; cada archivo numerado agrega su enfoque (props de
+pitcher, matchup de lineup, Statcast, mercado/EV, sharp action, códigos y
+reglas de Star Sport, bankroll físico, etc.).
 
 ## Nota sobre el nombre del repositorio
 
 Este proyecto está pensado para vivir en un repositorio llamado
 **StrikeoutLab**. Repositorio actual: `gianlouis47/newrepo` — GitHub
-permite renombrarlo sin romper enlaces existentes desde
-**Settings → General → Repository name**; esa acción no está automatizada
-aquí porque afecta al repositorio en sí, no solo a su contenido.
+permite renombrarlo sin romper enlaces existentes desde **Settings →
+General → Repository name**; esa acción no está automatizada aquí porque
+afecta al repositorio en sí, no solo a su contenido.

@@ -1,0 +1,18 @@
+{
+  "name": "@strikeoutlab/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Funciones puras de cálculo y calibración de StrikeoutLab. Sin efectos secundarios, sin IO.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.11"
+  }
+}
