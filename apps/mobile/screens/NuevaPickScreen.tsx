@@ -20,6 +20,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   const [rival, setRival] = useState("");
   const [linea, setLinea] = useState("5.5");
   const [pick, setPick] = useState<"OVER" | "UNDER">("OVER");
+  const [manoPitcher, setManoPitcher] = useState<"RHP" | "LHP">("RHP");
   const [confianza, setConfianza] = useState("");
   const [nivel, setNivel] = useState<(typeof NIVELES)[number]>("ORO");
   const [notas, setNotas] = useState("");
@@ -69,6 +70,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
         linea: parseFloat(linea),
         pick,
         notas: notas || undefined,
+        manoPitcher,
       });
       setRespuestaIA(respuesta);
       setConfianza((respuesta.juicioIA.confianza * 100).toFixed(0));
@@ -183,6 +185,20 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
         <SelectorPick valor={pick} onCambiar={setPick} />
       </View>
 
+      <View>
+        <Text style={estilos.etiqueta}>MANO DEL PITCHER (para buscar el split del rival)</Text>
+        <View style={estilos.filaSelector}>
+          {(["RHP", "LHP"] as const).map((m) => (
+            <Boton
+              key={m}
+              titulo={m === "RHP" ? "Derecho" : "Zurdo"}
+              variante={manoPitcher === m ? "primario" : "secundario"}
+              onPress={() => setManoPitcher(m)}
+            />
+          ))}
+        </View>
+      </View>
+
       <Campo
         etiqueta="Notas / datos adicionales (opcional)"
         value={notas}
@@ -208,6 +224,31 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
               {respuestaIA.calculada.advertencia ? ` — ${respuestaIA.calculada.advertencia}` : ""}
             </Text>
           )}
+
+          <View style={{ gap: 4, borderTopWidth: 1, borderTopColor: colores.borde, paddingTop: 8 }}>
+            <Text style={{ color: colores.textoSuave, fontWeight: "700", fontSize: 12 }}>
+              CALCULADORA (chequeo cruzado, no es la IA)
+            </Text>
+            {respuestaIA.puntajeHeuristico.confianza !== null ? (
+              <>
+                <Text style={{ color: colores.texto }}>
+                  {respuestaIA.puntajeHeuristico.nivel} ({(respuestaIA.puntajeHeuristico.confianza * 100).toFixed(0)}%)
+                  {" — "}
+                  usó: {respuestaIA.puntajeHeuristico.variablesUsadas.join(", ")}
+                </Text>
+                {Math.abs(respuestaIA.puntajeHeuristico.confianza - respuestaIA.juicioIA.confianza) > 0.15 && (
+                  <Mensaje
+                    tipo="error"
+                    texto="⚠️ La calculadora y la IA no coinciden mucho — revisá bien antes de guardar."
+                  />
+                )}
+              </>
+            ) : (
+              <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+                {respuestaIA.puntajeHeuristico.advertencia}
+              </Text>
+            )}
+          </View>
 
           {respuestaIA.busquedasRealizadas.length > 0 && (
             <View style={{ gap: 4 }}>

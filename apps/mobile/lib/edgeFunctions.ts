@@ -47,6 +47,15 @@ export interface StatsEquipoGuardado {
   fuente: string;
 }
 
+export interface ResultadoCalculadora {
+  puntaje: number | null;
+  confianza: number | null;
+  nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA" | null;
+  variablesUsadas: string[];
+  variablesFaltantes: string[];
+  advertencia: string | null;
+}
+
 export interface AnalizarPitcherRespuesta {
   calculada: TasaSuperacionLinea | null;
   juicioIA: JuicioIA;
@@ -54,6 +63,7 @@ export interface AnalizarPitcherRespuesta {
   busquedasRealizadas: BusquedaRealizada[];
   statsPitcherGuardados: StatsPitcherGuardado[];
   statsEquipoGuardados: StatsEquipoGuardado[];
+  puntajeHeuristico: ResultadoCalculadora;
 }
 
 export async function analizarPitcher(params: {
@@ -63,6 +73,7 @@ export async function analizarPitcher(params: {
   linea: number;
   pick: PickTipo;
   notas?: string;
+  manoPitcher?: "RHP" | "LHP";
 }): Promise<AnalizarPitcherRespuesta> {
   const { data, error } = await supabase.functions.invoke<AnalizarPitcherRespuesta>("analizar-pitcher", {
     body: params,

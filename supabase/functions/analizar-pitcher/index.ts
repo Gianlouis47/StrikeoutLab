@@ -164,6 +164,117 @@ function reporteCalibracion(picks: PickCalibracion[]): BandaCalibracion[] {
   return filas;
 }
 
+// ---------- calculadora heurística (ver packages/core/src/calculadoraHeuristica.ts) ----------
+//
+// Chequeo cruzado puramente aritmético, NO la IA — sirve para detectar
+// cuando el JUICIO de la IA se aleja mucho de lo que dicen los números
+// reales ya recolectados. Nunca se guarda como fuente_confianza=CALCULADA:
+// es una comparación, no una fuente de confianza en sí misma.
+
+interface StatsPitcherEntradaCalc {
+  kPct?: number;
+  whiffPct?: number;
+  cswPct?: number;
+  swstrPct?: number;
+  k9?: number;
+  whip?: number;
+  ip?: number;
+  correaPitcheosPromedio?: number;
+}
+
+interface ResultadoCalculadora {
+  puntaje: number | null;
+  confianza: number | null;
+  nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA" | null;
+  variablesUsadas: string[];
+  variablesFaltantes: string[];
+  advertencia: string | null;
+}
+
+const ANCLA_K_PCT = { bajo: 15, alto: 35 };
+const ANCLA_WHIFF_PCT = { bajo: 18, alto: 35 };
+const ANCLA_CSW_PCT = { bajo: 24, alto: 34 };
+const ANCLA_SWSTR_PCT = { bajo: 7, alto: 16 };
+const ANCLA_K9 = { bajo: 6, alto: 12 };
+const ANCLA_WHIP = { bajo: 1.6, alto: 0.95 };
+const ANCLA_CORREA = { bajo: 70, alto: 105 };
+const ANCLA_RIVAL_K_PCT = { bajo: 15, alto: 30 };
+const MUESTRA_IP_MINIMA = 15;
+
+function escalar(valor: number, bajo: number, alto: number): number {
+  const proporcion = (valor - bajo) / (alto - bajo);
+  return Math.max(0, Math.min(100, proporcion * 100));
+}
+
+function nivelDeCalculadora(confianza: number): ResultadoCalculadora["nivel"] {
+  if (confianza >= 0.95) return "DIAMANTE_ALTO";
+  if (confianza >= 0.9) return "DIAMANTE";
+  if (confianza >= 0.85) return "ORO_ALTO";
+  if (confianza >= 0.8) return "ORO";
+  return "IMPUREZA";
+}
+
+function calcularPuntajeHeuristico(
+  pitcher: StatsPitcherEntradaCalc,
+  rivalKPct: number | undefined,
+  pick: PickTipo,
+): ResultadoCalculadora {
+  const componentes: Array<{ valor: number; peso: number }> = [];
+  const variablesUsadas: string[] = [];
+  const variablesFaltantes: string[] = [];
+
+  function agregar(nombre: string, valor: number | undefined, ancla: { bajo: number; alto: number }, peso: number) {
+    if (valor === undefined) {
+      variablesFaltantes.push(nombre);
+      return;
+    }
+    componentes.push({ valor: escalar(valor, ancla.bajo, ancla.alto), peso });
+    variablesUsadas.push(nombre);
+  }
+
+  agregar("K%", pitcher.kPct, ANCLA_K_PCT, 1);
+  agregar("Whiff%", pitcher.whiffPct, ANCLA_WHIFF_PCT, 1);
+  agregar("CSW%", pitcher.cswPct, ANCLA_CSW_PCT, 1);
+  agregar("SwStr%", pitcher.swstrPct, ANCLA_SWSTR_PCT, 1);
+  agregar("K/9", pitcher.k9, ANCLA_K9, 1);
+  agregar("WHIP", pitcher.whip, ANCLA_WHIP, 0.7);
+  agregar("correa del mánager", pitcher.correaPitcheosPromedio, ANCLA_CORREA, 0.7);
+
+  if (rivalKPct !== undefined) {
+    const escaladoRival = escalar(rivalKPct, ANCLA_RIVAL_K_PCT.bajo, ANCLA_RIVAL_K_PCT.alto);
+    componentes.push({ valor: pick === "OVER" ? escaladoRival : 100 - escaladoRival, peso: 1.2 });
+    variablesUsadas.push("K% del rival");
+  } else {
+    variablesFaltantes.push("K% del rival");
+  }
+
+  if (componentes.length < 3) {
+    return {
+      puntaje: null,
+      confianza: null,
+      nivel: null,
+      variablesUsadas,
+      variablesFaltantes,
+      advertencia: `Datos insuficientes para un puntaje confiable (solo ${componentes.length} variable(s) disponible(s)).`,
+    };
+  }
+
+  const pesoTotal = componentes.reduce((acc, c) => acc + c.peso, 0);
+  const puntaje = componentes.reduce((acc, c) => acc + c.valor * c.peso, 0) / pesoTotal;
+
+  let advertencia: string | null = null;
+  if (pitcher.ip !== undefined && pitcher.ip < MUESTRA_IP_MINIMA) {
+    advertencia = `Muestra de temporada chica (${pitcher.ip} IP) — el puntaje puede ser volátil todavía.`;
+  }
+  if (variablesFaltantes.length > 0) {
+    const nota = `Calculado sin: ${variablesFaltantes.join(", ")}.`;
+    advertencia = advertencia ? `${advertencia} ${nota}` : nota;
+  }
+
+  const confianza = puntaje / 100;
+  return { puntaje, confianza, nivel: nivelDeCalculadora(confianza), variablesUsadas, variablesFaltantes, advertencia };
+}
+
 // ---------- framework (ver docs/framework/) ----------
 
 const FRAMEWORK_SISTEMA = `Eres un analista cuantitativo de MLB, con enfoque sharp/sindicato, especializado en props de ponches (strikeouts) de lanzadores para Star Sport (banca física dominicana). El objetivo es detectar valor matemático (+EV), no adivinar ganadores.
@@ -233,7 +344,12 @@ async function buscarWeb(query: string): Promise<string> {
 // ---------- NVIDIA NIM (API OpenAI-compatible, con tool-calling) ----------
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const MODELO_TEXTO = Deno.env.get("NVIDIA_MODEL_TEXTO") ?? "meta/llama-3.3-70b-instruct";
+// Modelo de "máximo esfuerzo" por defecto: el más grande de la familia Llama
+// en NVIDIA NIM con soporte confiable de tool-calling (los modelos de
+// razonamiento tipo DeepSeek-R1 mezclan su traza de pensamiento en el
+// content y rompen el parseo de tool_calls/JSON de este flujo). Se puede
+// override sin tocar código con el secret NVIDIA_MODEL_TEXTO.
+const MODELO_TEXTO = Deno.env.get("NVIDIA_MODEL_TEXTO") ?? "meta/llama-3.1-405b-instruct";
 const MAX_RONDAS_HERRAMIENTA = 3;
 
 const HERRAMIENTAS = [
@@ -464,6 +580,7 @@ interface SolicitudAnalisis {
   pick: PickTipo;
   notas?: string;
   ultimasNSalidas?: number;
+  manoPitcher?: "RHP" | "LHP";
 }
 
 interface PropuestaAprendizaje {
@@ -525,6 +642,39 @@ Deno.serve(async (req: Request) => {
 
   const calculada = salidas.length > 0 ? tasaSuperacionLinea(salidas, solicitud.linea, solicitud.pick) : null;
 
+  const { data: statsPitcherDb } = await supabase
+    .from("pitcher_stats_snapshot")
+    .select("k_pct, whiff_pct, csw_pct, swstr_pct, k_9, whip, ip, correa_pitcheos_promedio")
+    .eq("pitcher", solicitud.pitcher)
+    .order("fecha_corte", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let statsRivalQuery = supabase
+    .from("equipo_stats_split")
+    .select("k_pct")
+    .eq("equipo", solicitud.rival)
+    .eq("ventana", "TEMPORADA")
+    .order("fecha_corte", { ascending: false })
+    .limit(1);
+  if (solicitud.manoPitcher) statsRivalQuery = statsRivalQuery.eq("vs_mano", solicitud.manoPitcher);
+  const { data: statsRivalDb } = await statsRivalQuery.maybeSingle();
+
+  const puntajeHeuristico = calcularPuntajeHeuristico(
+    {
+      kPct: statsPitcherDb?.k_pct ?? undefined,
+      whiffPct: statsPitcherDb?.whiff_pct ?? undefined,
+      cswPct: statsPitcherDb?.csw_pct ?? undefined,
+      swstrPct: statsPitcherDb?.swstr_pct ?? undefined,
+      k9: statsPitcherDb?.k_9 ?? undefined,
+      whip: statsPitcherDb?.whip ?? undefined,
+      ip: statsPitcherDb?.ip ?? undefined,
+      correaPitcheosPromedio: statsPitcherDb?.correa_pitcheos_promedio ?? undefined,
+    },
+    statsRivalDb?.k_pct ?? undefined,
+    solicitud.pick,
+  );
+
   const { data: picksDb, error: errorPicks } = await supabase
     .from("picks")
     .select("confianza, resultado, fuente_confianza")
@@ -581,6 +731,7 @@ Deno.serve(async (req: Request) => {
       busquedasRealizadas,
       statsPitcherGuardados,
       statsEquipoGuardados,
+      puntajeHeuristico,
     }),
     { headers: { "Content-Type": "application/json" } },
   );
