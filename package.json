@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "test": "npm run test --workspace packages/core",
-    "build": "npm run build --workspace packages/core"
+    "build": "npm run build --workspace packages/core",
+    "postinstall": "npm run build --workspace packages/core"
   },
   "engines": {
     "node": ">=20"
