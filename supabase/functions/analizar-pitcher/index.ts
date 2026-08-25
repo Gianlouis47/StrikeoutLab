@@ -174,12 +174,12 @@ Reglas no negociables:
 - Si falta un dato crítico (lineup no confirmado, línea o cuota no verificada, estadísticas desactualizadas), tu veredicto debe ser "NO_BET" o debes pedir el dato faltante. Nunca inventas ni asumes.
 - Un empate en línea entera (K == línea) no es un veredicto de "ganó" ni "perdió" — es un estado aparte; no lo colapses en tu razonamiento.
 - Todo lo que tú generas es fuente_confianza=JUICIO, nunca CALCULADA — esa etiqueta solo aplica a lo que sale de contar salidas reales.
-- Clasificación de nivel de pureza: DIAMANTE 90-99%, ORO_ALTO/ORO 80-89%, IMPUREZA 79% o menos. Si tu confianza real cae en IMPUREZA, el veredicto correcto casi siempre es NO_BET — nunca fuerces un Over/Under solo para completar un ticket.
+- Clasificación de nivel de pureza, por tramo exacto de confianza: DIAMANTE_ALTO 95-100%, DIAMANTE 90-94%, ORO_ALTO 85-89%, ORO 80-84%, IMPUREZA 79% o menos. Las jugadas de mayor certeza real están de 85% para arriba (ORO_ALTO, DIAMANTE, DIAMANTE_ALTO) — ahí es donde el sistema puede confiar con más seguridad. Si tu confianza real cae en IMPUREZA, el veredicto correcto casi siempre es NO_BET — nunca fuerces un Over/Under solo para completar un ticket. Importante: IMPUREZA no significa que el lanzador sea malo — significa que el evento (contexto, matchup, incertidumbre de datos) impide tener certeza suficiente sobre ESTA apuesta puntual, aunque el lanzador en sí sea bueno. Reflejá esa distinción en tu "motivo" cuando el veredicto sea NO_BET.
 - Tenés una herramienta "buscar_web" para consultar información actual (lineup confirmado de hoy, clima, noticias recientes, cuotas). Úsala cuando el contexto que te dieron no alcance o pueda estar desactualizado — no adivines un dato que podés verificar. No abuses: 1-3 búsquedas concretas alcanzan, nunca uses la misma consulta dos veces.
 - Fuentes preferidas, por tipo de dato: MLB.com (lineup oficial confirmado, roster, calendario, umpire asignado), FanGraphs (K%, K/9, Whiff%, CSW%, SwStr%, splits RHB/LHB, proyecciones), Baseball Savant (Statcast: velocidad, spin, ubicación de pitcheos), Linemate (líneas de props y su movimiento). Incluí el nombre del sitio en tu consulta (ej. "Gerrit Cole K% FanGraphs 2026" o "Yankees lineup hoy MLB.com") para priorizar esas fuentes por sobre notas genéricas. Si esas fuentes no tienen el dato, podés recurrir a otras confiables (ESPN, Rotowire) — pero decilo en tu motivo si el dato no viene de una fuente preferida.
 - Si de una búsqueda sacás un dato nuevo, verificable y útil más allá de este análisis puntual (una regla de Star Sport, un patrón que se repite, algo sobre el lineup que conviene recordar), podés proponer una entrada a la bitácora de aprendizaje con "propuesta_aprendizaje" — nunca se guarda sola, un humano la confirma. Si no hay nada así, dejalo en null.
 - Responde tu mensaje FINAL (después de cualquier búsqueda) SIEMPRE con JSON válido, sin texto fuera del JSON, con esta forma exacta:
-  {"confianza": <number 0-1>, "nivel": "DIAMANTE"|"ORO_ALTO"|"ORO"|"IMPUREZA", "veredicto": "OVER"|"UNDER"|"NO_BET", "motivo": "<string breve>", "factores_clave": ["..."], "propuesta_aprendizaje": {"descubrimiento": "<string>", "fuente": "<string, ej. URL o búsqueda>", "regla_nueva": "<string o null>", "por_que_importa": "<string o null>"} | null}`;
+  {"confianza": <number 0-1>, "nivel": "DIAMANTE_ALTO"|"DIAMANTE"|"ORO_ALTO"|"ORO"|"IMPUREZA", "veredicto": "OVER"|"UNDER"|"NO_BET", "motivo": "<string breve>", "factores_clave": ["..."], "propuesta_aprendizaje": {"descubrimiento": "<string>", "fuente": "<string, ej. URL o búsqueda>", "regla_nueva": "<string o null>", "por_que_importa": "<string o null>"} | null}`;
 
 function contextoCalibracion(bandas: BandaCalibracion[]): string {
   const juicio = bandas.filter((b) => b.fuenteConfianza === "JUICIO");
@@ -357,7 +357,7 @@ interface PropuestaAprendizaje {
 
 interface JuicioIA {
   confianza: number;
-  nivel: "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
+  nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
   veredicto: "OVER" | "UNDER" | "NO_BET";
   motivo: string;
   factores_clave: string[];

@@ -11,7 +11,7 @@ export interface PropuestaAprendizaje {
 
 export interface JuicioIA {
   confianza: number;
-  nivel: "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
+  nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
   veredicto: "OVER" | "UNDER" | "NO_BET";
   motivo: string;
   factores_clave: string[];

@@ -5,7 +5,7 @@ import { analizarPitcher, type AnalizarPitcherRespuesta, type DatosExtraidosFoto
 import { repositorio } from "../lib/supabase-repository";
 import { aprendizajeNuevoSchema, pickNuevoSchema } from "../lib/validators";
 
-const NIVELES = ["DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"] as const;
+const NIVELES = ["DIAMANTE_ALTO", "DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"] as const;
 
 export interface BorradorPick {
   datos: DatosExtraidosFoto;

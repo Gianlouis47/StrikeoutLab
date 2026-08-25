@@ -9,7 +9,7 @@ interface FilaPickDb {
   confianza: number;
   resultado: "GANO" | "PERDIO" | "EMPATE" | null;
   fuente_confianza: "CALCULADA" | "JUICIO";
-  nivel: "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
+  nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
   ticket_id: string | null;
   stake: number | null;
   payout: number | null;

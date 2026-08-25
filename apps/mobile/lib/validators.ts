@@ -12,7 +12,7 @@ export const pickNuevoSchema = z.object({
   linea: z.number().nonnegative("La línea debe ser un número válido"),
   pick: z.enum(["OVER", "UNDER"]),
   confianza: z.number().min(0, "Confianza debe ser 0-100").max(1, "Confianza debe ser 0-100"),
-  nivel: z.enum(["DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"]),
+  nivel: z.enum(["DIAMANTE_ALTO", "DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"]),
   fuenteConfianza: z.enum(["CALCULADA", "JUICIO"]),
   motivo: z.string().nullable(),
 });

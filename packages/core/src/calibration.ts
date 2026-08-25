@@ -11,7 +11,7 @@
 import type { Resultado } from "./calculations.js";
 
 export type FuenteConfianza = "CALCULADA" | "JUICIO";
-export type Nivel = "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
+export type Nivel = "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
 
 export interface PickCalibracion {
   confianza: number;
