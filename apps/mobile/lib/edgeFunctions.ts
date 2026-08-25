@@ -23,11 +23,37 @@ export interface BusquedaRealizada {
   resultado: string;
 }
 
+export interface StatsPitcherGuardado {
+  pitcher: string;
+  k_pct?: number;
+  whiff_pct?: number;
+  csw_pct?: number;
+  swstr_pct?: number;
+  k_9?: number;
+  whip?: number;
+  ip?: number;
+  correa_pitcheos_promedio?: number;
+  correa_nota?: string;
+  fuente: string;
+}
+
+export interface StatsEquipoGuardado {
+  equipo: string;
+  ventana: "TEMPORADA" | "ULTIMOS_14";
+  vs_mano: "RHP" | "LHP";
+  k_pct?: number;
+  swing_pct?: number;
+  chase_pct?: number;
+  fuente: string;
+}
+
 export interface AnalizarPitcherRespuesta {
   calculada: TasaSuperacionLinea | null;
   juicioIA: JuicioIA;
   contextoCalibracionUsado: BandaCalibracion[];
   busquedasRealizadas: BusquedaRealizada[];
+  statsPitcherGuardados: StatsPitcherGuardado[];
+  statsEquipoGuardados: StatsEquipoGuardado[];
 }
 
 export async function analizarPitcher(params: {

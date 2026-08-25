@@ -222,6 +222,45 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
             </View>
           )}
 
+          {(respuestaIA.statsPitcherGuardados.length > 0 || respuestaIA.statsEquipoGuardados.length > 0) && (
+            <View style={{ gap: 4 }}>
+              <Text style={{ color: colores.textoSuave, fontWeight: "700", fontSize: 12 }}>
+                DATOS RECOLECTADOS (guardados para la próxima)
+              </Text>
+              {respuestaIA.statsPitcherGuardados.map((s, i) => (
+                <Text key={`p${i}`} style={{ color: colores.textoSuave, fontSize: 12 }}>
+                  • {s.pitcher}:{" "}
+                  {[
+                    s.k_pct !== undefined && `K% ${s.k_pct}`,
+                    s.whiff_pct !== undefined && `Whiff% ${s.whiff_pct}`,
+                    s.csw_pct !== undefined && `CSW% ${s.csw_pct}`,
+                    s.swstr_pct !== undefined && `SwStr% ${s.swstr_pct}`,
+                    s.k_9 !== undefined && `K/9 ${s.k_9}`,
+                    s.whip !== undefined && `WHIP ${s.whip}`,
+                    s.ip !== undefined && `IP ${s.ip}`,
+                    s.correa_pitcheos_promedio !== undefined && `correa ~${s.correa_pitcheos_promedio} pitcheos`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}{" "}
+                  ({s.fuente})
+                </Text>
+              ))}
+              {respuestaIA.statsEquipoGuardados.map((s, i) => (
+                <Text key={`e${i}`} style={{ color: colores.textoSuave, fontSize: 12 }}>
+                  • {s.equipo} vs {s.vs_mano} ({s.ventana}):{" "}
+                  {[
+                    s.k_pct !== undefined && `K% ${s.k_pct}`,
+                    s.swing_pct !== undefined && `Swing% ${s.swing_pct}`,
+                    s.chase_pct !== undefined && `Chase% ${s.chase_pct}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}{" "}
+                  ({s.fuente})
+                </Text>
+              ))}
+            </View>
+          )}
+
           {respuestaIA.juicioIA.propuesta_aprendizaje && (
             <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: colores.borde, paddingTop: 8 }}>
               <Text style={{ color: colores.acento, fontWeight: "700", fontSize: 12 }}>

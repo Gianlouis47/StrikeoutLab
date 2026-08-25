@@ -176,7 +176,8 @@ Reglas no negociables:
 - Todo lo que tú generas es fuente_confianza=JUICIO, nunca CALCULADA — esa etiqueta solo aplica a lo que sale de contar salidas reales.
 - Clasificación de nivel de pureza, por tramo exacto de confianza: DIAMANTE_ALTO 95-100%, DIAMANTE 90-94%, ORO_ALTO 85-89%, ORO 80-84%, IMPUREZA 79% o menos. Las jugadas de mayor certeza real están de 85% para arriba (ORO_ALTO, DIAMANTE, DIAMANTE_ALTO) — ahí es donde el sistema puede confiar con más seguridad. Si tu confianza real cae en IMPUREZA, el veredicto correcto casi siempre es NO_BET — nunca fuerces un Over/Under solo para completar un ticket. Importante: IMPUREZA no significa que el lanzador sea malo — significa que el evento (contexto, matchup, incertidumbre de datos) impide tener certeza suficiente sobre ESTA apuesta puntual, aunque el lanzador en sí sea bueno. Reflejá esa distinción en tu "motivo" cuando el veredicto sea NO_BET.
 - Tenés una herramienta "buscar_web" para consultar información actual (lineup confirmado de hoy, clima, noticias recientes, cuotas). Úsala cuando el contexto que te dieron no alcance o pueda estar desactualizado — no adivines un dato que podés verificar. No abuses: 1-3 búsquedas concretas alcanzan, nunca uses la misma consulta dos veces.
-- Fuentes preferidas, por tipo de dato: MLB.com (lineup oficial confirmado, roster, calendario, umpire asignado), FanGraphs (K%, K/9, Whiff%, CSW%, SwStr%, splits RHB/LHB, proyecciones), Baseball Savant (Statcast: velocidad, spin, ubicación de pitcheos), Linemate (líneas de props y su movimiento). Incluí el nombre del sitio en tu consulta (ej. "Gerrit Cole K% FanGraphs 2026" o "Yankees lineup hoy MLB.com") para priorizar esas fuentes por sobre notas genéricas. Si esas fuentes no tienen el dato, podés recurrir a otras confiables (ESPN, Rotowire) — pero decilo en tu motivo si el dato no viene de una fuente preferida.
+- Fuentes preferidas, por tipo de dato: MLB.com (lineup oficial confirmado, roster, calendario, umpire asignado), FanGraphs (K%, K/9, Whiff%, CSW%, SwStr%, WHIP, IP, splits RHB/LHB, proyecciones, tendencia del mánager de dejar tirar al abridor), Baseball Savant (Statcast: velocidad, spin, ubicación de pitcheos), Linemate (líneas de props, su movimiento, y splits de equipo K%/swing% vs derechos y zurdos). Incluí el nombre del sitio en tu consulta (ej. "Gerrit Cole K% FanGraphs 2026" o "Yankees lineup hoy MLB.com") para priorizar esas fuentes por sobre notas genéricas. Si esas fuentes no tienen el dato, podés recurrir a otras confiables (ESPN, Rotowire) — pero decilo en tu motivo si el dato no viene de una fuente preferida.
+- Tenés dos herramientas más, "guardar_stats_pitcher" y "guardar_stats_equipo", para que los números reales que vayas encontrando (K%, Whiff%, CSW%, SwStr%, K/9, WHIP, IP, correa del mánager de un pitcher; K%/swing%/chase% de un equipo vs derechos o zurdos) queden guardados y no haya que rebuscarlos la próxima vez. Llamalas cuando encuentres un número concreto y verificable de una fuente preferida — nunca inventes un valor solo para completar los campos; los campos que no encontraste simplemente los omitís.
 - Si de una búsqueda sacás un dato nuevo, verificable y útil más allá de este análisis puntual (una regla de Star Sport, un patrón que se repite, algo sobre el lineup que conviene recordar), podés proponer una entrada a la bitácora de aprendizaje con "propuesta_aprendizaje" — nunca se guarda sola, un humano la confirma. Si no hay nada así, dejalo en null.
 - Responde tu mensaje FINAL (después de cualquier búsqueda) SIEMPRE con JSON válido, sin texto fuera del JSON, con esta forma exacta:
   {"confianza": <number 0-1>, "nivel": "DIAMANTE_ALTO"|"DIAMANTE"|"ORO_ALTO"|"ORO"|"IMPUREZA", "veredicto": "OVER"|"UNDER"|"NO_BET", "motivo": "<string breve>", "factores_clave": ["..."], "propuesta_aprendizaje": {"descubrimiento": "<string>", "fuente": "<string, ej. URL o búsqueda>", "regla_nueva": "<string o null>", "por_que_importa": "<string o null>"} | null}`;
@@ -251,6 +252,58 @@ const HERRAMIENTAS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "guardar_stats_pitcher",
+      description:
+        "Guarda estadísticas reales de un pitcher (K%, Whiff%, CSW%, SwStr%, K/9, WHIP, IP, correa del mánager) que hayas encontrado en FanGraphs, MLB.com u otra fuente confiable. Solo campos que realmente encontraste — omití los que no.",
+      parameters: {
+        type: "object",
+        properties: {
+          pitcher: { type: "string" },
+          k_pct: { type: "number", description: "Tasa de ponches (K%), 0-100" },
+          whiff_pct: { type: "number" },
+          csw_pct: { type: "number" },
+          swstr_pct: { type: "number" },
+          k_9: { type: "number" },
+          whip: { type: "number" },
+          ip: { type: "number", description: "Innings pitcheadas en la temporada" },
+          correa_pitcheos_promedio: {
+            type: "number",
+            description: "Promedio de pitcheos por salida antes de ser removido, si se encuentra un número",
+          },
+          correa_nota: {
+            type: "string",
+            description: "Nota cualitativa sobre la tendencia del mánager si no hay un número claro",
+          },
+          fuente: { type: "string", description: "URL o nombre de la fuente (ej. FanGraphs, MLB.com)" },
+        },
+        required: ["pitcher", "fuente"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "guardar_stats_equipo",
+      description:
+        "Guarda splits reales de un equipo como bateadores (K%, swing%, chase%) vs derechos o zurdos, encontrados en FanGraphs, MLB.com o Linemate. Solo campos que realmente encontraste.",
+      parameters: {
+        type: "object",
+        properties: {
+          equipo: { type: "string" },
+          ventana: { type: "string", enum: ["TEMPORADA", "ULTIMOS_14"] },
+          vs_mano: { type: "string", enum: ["RHP", "LHP"] },
+          k_pct: { type: "number" },
+          swing_pct: { type: "number" },
+          chase_pct: { type: "number" },
+          fuente: { type: "string" },
+        },
+        required: ["equipo", "ventana", "vs_mano", "fuente"],
+      },
+    },
+  },
 ];
 
 interface NvidiaMensaje {
@@ -260,13 +313,63 @@ interface NvidiaMensaje {
   tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
 }
 
+interface StatsPitcherGuardado {
+  pitcher: string;
+  k_pct?: number;
+  whiff_pct?: number;
+  csw_pct?: number;
+  swstr_pct?: number;
+  k_9?: number;
+  whip?: number;
+  ip?: number;
+  correa_pitcheos_promedio?: number;
+  correa_nota?: string;
+  fuente: string;
+}
+
+interface StatsEquipoGuardado {
+  equipo: string;
+  ventana: "TEMPORADA" | "ULTIMOS_14";
+  vs_mano: "RHP" | "LHP";
+  k_pct?: number;
+  swing_pct?: number;
+  chase_pct?: number;
+  fuente: string;
+}
+
 interface ResultadoChatConHerramientas {
   contenido: string;
   busquedasRealizadas: Array<{ query: string; resultado: string }>;
+  statsPitcherGuardados: StatsPitcherGuardado[];
+  statsEquipoGuardados: StatsEquipoGuardado[];
+}
+
+// deno-lint-ignore no-explicit-any
+async function guardarStatsPitcher(supabase: any, datos: StatsPitcherGuardado): Promise<string> {
+  const fechaCorte = new Date().toISOString().slice(0, 10);
+  const { error } = await supabase.from("pitcher_stats_snapshot").upsert(
+    { ...datos, fecha_corte: fechaCorte },
+    { onConflict: "pitcher,fecha_corte" },
+  );
+  if (error) return `No se pudo guardar (${error.message}) — seguí con el análisis igual.`;
+  return `Guardado: stats de ${datos.pitcher} al ${fechaCorte}.`;
+}
+
+// deno-lint-ignore no-explicit-any
+async function guardarStatsEquipo(supabase: any, datos: StatsEquipoGuardado): Promise<string> {
+  const fechaCorte = new Date().toISOString().slice(0, 10);
+  const { error } = await supabase.from("equipo_stats_split").upsert(
+    { ...datos, fecha_corte: fechaCorte },
+    { onConflict: "equipo,ventana,vs_mano,fecha_corte" },
+  );
+  if (error) return `No se pudo guardar (${error.message}) — seguí con el análisis igual.`;
+  return `Guardado: split de ${datos.equipo} (${datos.ventana}, vs ${datos.vs_mano}) al ${fechaCorte}.`;
 }
 
 async function llamarNvidiaChatConHerramientas(
   mensajesIniciales: NvidiaMensaje[],
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
 ): Promise<ResultadoChatConHerramientas> {
   const apiKey = Deno.env.get("NVIDIA_API_KEY");
   if (!apiKey) {
@@ -277,6 +380,8 @@ async function llamarNvidiaChatConHerramientas(
 
   const mensajes: NvidiaMensaje[] = [...mensajesIniciales];
   const busquedasRealizadas: Array<{ query: string; resultado: string }> = [];
+  const statsPitcherGuardados: StatsPitcherGuardado[] = [];
+  const statsEquipoGuardados: StatsEquipoGuardado[] = [];
 
   for (let ronda = 0; ronda < MAX_RONDAS_HERRAMIENTA; ronda++) {
     const respuesta = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
@@ -303,23 +408,36 @@ async function llamarNvidiaChatConHerramientas(
     if (mensaje.tool_calls && mensaje.tool_calls.length > 0) {
       mensajes.push(mensaje);
       for (const llamada of mensaje.tool_calls) {
-        let query = "";
+        let argumentos: Record<string, unknown> = {};
         try {
-          query = JSON.parse(llamada.function.arguments).query ?? "";
+          argumentos = JSON.parse(llamada.function.arguments);
         } catch {
-          // argumentos mal formados del modelo — seguimos con query vacía, buscarWeb la maneja
+          // argumentos mal formados del modelo — seguimos con objeto vacío
         }
-        const resultado = query ? await buscarWeb(query) : "Falta el término de búsqueda.";
-        busquedasRealizadas.push({ query, resultado });
+
+        let resultado: string;
+        if (llamada.function.name === "guardar_stats_pitcher") {
+          const entrada = argumentos as unknown as StatsPitcherGuardado;
+          statsPitcherGuardados.push(entrada);
+          resultado = await guardarStatsPitcher(supabase, entrada);
+        } else if (llamada.function.name === "guardar_stats_equipo") {
+          const entrada = argumentos as unknown as StatsEquipoGuardado;
+          statsEquipoGuardados.push(entrada);
+          resultado = await guardarStatsEquipo(supabase, entrada);
+        } else {
+          const query = (argumentos.query as string) ?? "";
+          resultado = query ? await buscarWeb(query) : "Falta el término de búsqueda.";
+          busquedasRealizadas.push({ query, resultado });
+        }
         mensajes.push({ role: "tool", tool_call_id: llamada.id, content: resultado });
       }
-      continue; // pedirle al modelo que siga con los resultados de la búsqueda
+      continue; // pedirle al modelo que siga con los resultados de las herramientas
     }
 
     if (typeof mensaje.content !== "string") {
       throw new Error("Respuesta de NVIDIA sin contenido de texto esperado.");
     }
-    return { contenido: mensaje.content, busquedasRealizadas };
+    return { contenido: mensaje.content, busquedasRealizadas, statsPitcherGuardados, statsEquipoGuardados };
   }
 
   throw new Error(`La IA encadenó más de ${MAX_RONDAS_HERRAMIENTA} búsquedas sin dar una respuesta final.`);
@@ -437,19 +555,33 @@ Deno.serve(async (req: Request) => {
 
   let juicioIA: JuicioIA;
   let busquedasRealizadas: Array<{ query: string; resultado: string }> = [];
+  let statsPitcherGuardados: StatsPitcherGuardado[] = [];
+  let statsEquipoGuardados: StatsEquipoGuardado[] = [];
   try {
-    const resultado = await llamarNvidiaChatConHerramientas([
-      { role: "system", content: `${FRAMEWORK_SISTEMA}\n\n${contextoCalibracion(bandas)}` },
-      { role: "user", content: mensajeUsuario },
-    ]);
+    const resultado = await llamarNvidiaChatConHerramientas(
+      [
+        { role: "system", content: `${FRAMEWORK_SISTEMA}\n\n${contextoCalibracion(bandas)}` },
+        { role: "user", content: mensajeUsuario },
+      ],
+      supabase,
+    );
     juicioIA = parsearJsonModelo<JuicioIA>(resultado.contenido);
     busquedasRealizadas = resultado.busquedasRealizadas;
+    statsPitcherGuardados = resultado.statsPitcherGuardados;
+    statsEquipoGuardados = resultado.statsEquipoGuardados;
   } catch (error) {
     return new Response(JSON.stringify({ error: (error as Error).message }), { status: 502 });
   }
 
   return new Response(
-    JSON.stringify({ calculada, juicioIA, contextoCalibracionUsado: bandas, busquedasRealizadas }),
+    JSON.stringify({
+      calculada,
+      juicioIA,
+      contextoCalibracionUsado: bandas,
+      busquedasRealizadas,
+      statsPitcherGuardados,
+      statsEquipoGuardados,
+    }),
     { headers: { "Content-Type": "application/json" } },
   );
 });
