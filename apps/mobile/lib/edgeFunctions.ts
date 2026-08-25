@@ -2,18 +2,32 @@ import type { PickTipo, TasaSuperacionLinea } from "@strikeoutlab/core";
 import type { BandaCalibracion } from "@strikeoutlab/core";
 import { supabase } from "./supabase";
 
+export interface PropuestaAprendizaje {
+  descubrimiento: string;
+  fuente: string;
+  regla_nueva: string | null;
+  por_que_importa: string | null;
+}
+
 export interface JuicioIA {
   confianza: number;
   nivel: "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
   veredicto: "OVER" | "UNDER" | "NO_BET";
   motivo: string;
   factores_clave: string[];
+  propuesta_aprendizaje: PropuestaAprendizaje | null;
+}
+
+export interface BusquedaRealizada {
+  query: string;
+  resultado: string;
 }
 
 export interface AnalizarPitcherRespuesta {
   calculada: TasaSuperacionLinea | null;
   juicioIA: JuicioIA;
   contextoCalibracionUsado: BandaCalibracion[];
+  busquedasRealizadas: BusquedaRealizada[];
 }
 
 export async function analizarPitcher(params: {

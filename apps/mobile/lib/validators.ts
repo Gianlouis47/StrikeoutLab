@@ -30,6 +30,14 @@ export const equipoTeamKSchema = z.object({
   fechaCorte: z.string().min(1),
 });
 
+export const aprendizajeNuevoSchema = z.object({
+  descubrimiento: z.string().min(1, "Falta el descubrimiento"),
+  fuente: z.string().nullable(),
+  reglaNueva: z.string().nullable(),
+  porQueImporta: z.string().nullable(),
+});
+export type AprendizajeNuevo = z.infer<typeof aprendizajeNuevoSchema>;
+
 export const confianzaParlaySchema = z
   .number({ error: "Confianza inválida" })
   .min(0, "Confianza debe ser 0-100")

@@ -3,7 +3,7 @@ import { ScrollView, Text, View } from "react-native";
 import { Boton, Campo, Mensaje, SelectorPick, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
 import { analizarPitcher, type AnalizarPitcherRespuesta, type DatosExtraidosFoto } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
-import { pickNuevoSchema } from "../lib/validators";
+import { aprendizajeNuevoSchema, pickNuevoSchema } from "../lib/validators";
 
 const NIVELES = ["DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"] as const;
 
@@ -49,10 +49,13 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [guardandoAprendizaje, setGuardandoAprendizaje] = useState(false);
+  const [aprendizajeGuardado, setAprendizajeGuardado] = useState(false);
 
   async function pedirOpinionIA() {
     setError(null);
     setOk(null);
+    setAprendizajeGuardado(false);
     if (!pitcher || !linea || !pick) {
       setError("Completa al menos pitcher, línea y pick antes de pedir la opinión de la IA.");
       return;
@@ -130,6 +133,39 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
     }
   }
 
+  async function guardarAprendizaje() {
+    const propuesta = respuestaIA?.juicioIA.propuesta_aprendizaje;
+    if (!propuesta) return;
+
+    const validacion = aprendizajeNuevoSchema.safeParse({
+      descubrimiento: propuesta.descubrimiento,
+      fuente: propuesta.fuente ?? null,
+      reglaNueva: propuesta.regla_nueva,
+      porQueImporta: propuesta.por_que_importa,
+    });
+    if (!validacion.success) {
+      setError(validacion.error.issues[0]?.message ?? "Propuesta de aprendizaje inválida.");
+      return;
+    }
+
+    setGuardandoAprendizaje(true);
+    setError(null);
+    try {
+      const datos = validacion.data;
+      await repositorio.crear("learning_log", {
+        descubrimiento: datos.descubrimiento,
+        fuente: datos.fuente,
+        regla_nueva: datos.reglaNueva,
+        por_que_importa: datos.porQueImporta,
+      });
+      setAprendizajeGuardado(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGuardandoAprendizaje(false);
+    }
+  }
+
   return (
     <ScrollView style={estilos.pantalla} contentContainerStyle={estilos.contenido}>
       <Titulo>Nuevo pick</Titulo>
@@ -171,6 +207,43 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
               {respuestaIA.calculada.ganadas}/{respuestaIA.calculada.total})
               {respuestaIA.calculada.advertencia ? ` — ${respuestaIA.calculada.advertencia}` : ""}
             </Text>
+          )}
+
+          {respuestaIA.busquedasRealizadas.length > 0 && (
+            <View style={{ gap: 4 }}>
+              <Text style={{ color: colores.textoSuave, fontWeight: "700", fontSize: 12 }}>
+                BÚSQUEDAS QUE HIZO LA IA
+              </Text>
+              {respuestaIA.busquedasRealizadas.map((b, i) => (
+                <Text key={i} style={{ color: colores.textoSuave, fontSize: 12 }}>
+                  • {b.query}
+                </Text>
+              ))}
+            </View>
+          )}
+
+          {respuestaIA.juicioIA.propuesta_aprendizaje && (
+            <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: colores.borde, paddingTop: 8 }}>
+              <Text style={{ color: colores.acento, fontWeight: "700", fontSize: 12 }}>
+                PROPUESTA PARA LA BITÁCORA DE APRENDIZAJE
+              </Text>
+              <Text style={{ color: colores.texto }}>{respuestaIA.juicioIA.propuesta_aprendizaje.descubrimiento}</Text>
+              {respuestaIA.juicioIA.propuesta_aprendizaje.por_que_importa && (
+                <Text style={{ color: colores.textoSuave }}>
+                  {respuestaIA.juicioIA.propuesta_aprendizaje.por_que_importa}
+                </Text>
+              )}
+              {aprendizajeGuardado ? (
+                <Mensaje tipo="exito" texto="Guardado en la bitácora." />
+              ) : (
+                <Boton
+                  titulo="Guardar en bitácora"
+                  variante="secundario"
+                  onPress={guardarAprendizaje}
+                  cargando={guardandoAprendizaje}
+                />
+              )}
+            </View>
           )}
         </Tarjeta>
       )}

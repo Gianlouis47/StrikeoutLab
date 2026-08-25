@@ -175,8 +175,10 @@ Reglas no negociables:
 - Un empate en línea entera (K == línea) no es un veredicto de "ganó" ni "perdió" — es un estado aparte; no lo colapses en tu razonamiento.
 - Todo lo que tú generas es fuente_confianza=JUICIO, nunca CALCULADA — esa etiqueta solo aplica a lo que sale de contar salidas reales.
 - Clasificación de nivel de pureza: DIAMANTE 90-99%, ORO_ALTO/ORO 80-89%, IMPUREZA 79% o menos. Si tu confianza real cae en IMPUREZA, el veredicto correcto casi siempre es NO_BET — nunca fuerces un Over/Under solo para completar un ticket.
-- Responde SIEMPRE con JSON válido, sin texto fuera del JSON, con esta forma exacta:
-  {"confianza": <number 0-1>, "nivel": "DIAMANTE"|"ORO_ALTO"|"ORO"|"IMPUREZA", "veredicto": "OVER"|"UNDER"|"NO_BET", "motivo": "<string breve>", "factores_clave": ["..."]}`;
+- Tenés una herramienta "buscar_web" para consultar información actual (lineup confirmado de hoy, clima, noticias recientes, cuotas). Úsala cuando el contexto que te dieron no alcance o pueda estar desactualizado — no adivines un dato que podés verificar. No abuses: 1-3 búsquedas concretas alcanzan, nunca uses la misma consulta dos veces.
+- Si de una búsqueda sacás un dato nuevo, verificable y útil más allá de este análisis puntual (una regla de Star Sport, un patrón que se repite, algo sobre el lineup que conviene recordar), podés proponer una entrada a la bitácora de aprendizaje con "propuesta_aprendizaje" — nunca se guarda sola, un humano la confirma. Si no hay nada así, dejalo en null.
+- Responde tu mensaje FINAL (después de cualquier búsqueda) SIEMPRE con JSON válido, sin texto fuera del JSON, con esta forma exacta:
+  {"confianza": <number 0-1>, "nivel": "DIAMANTE"|"ORO_ALTO"|"ORO"|"IMPUREZA", "veredicto": "OVER"|"UNDER"|"NO_BET", "motivo": "<string breve>", "factores_clave": ["..."], "propuesta_aprendizaje": {"descubrimiento": "<string>", "fuente": "<string, ej. URL o búsqueda>", "regla_nueva": "<string o null>", "por_que_importa": "<string o null>"} | null}`;
 
 function contextoCalibracion(bandas: BandaCalibracion[]): string {
   const juicio = bandas.filter((b) => b.fuenteConfianza === "JUICIO");
@@ -198,12 +200,73 @@ function contextoCalibracion(bandas: BandaCalibracion[]): string {
   );
 }
 
-// ---------- NVIDIA NIM (API OpenAI-compatible) ----------
+// ---------- Tavily (búsqueda web para la herramienta buscar_web) ----------
+
+async function buscarWeb(query: string): Promise<string> {
+  const tavilyKey = Deno.env.get("TAVILY_API_KEY");
+  if (!tavilyKey) {
+    return "Búsqueda web no disponible todavía (falta configurar TAVILY_API_KEY como secret de Supabase) — respondé solo con lo que ya tenés.";
+  }
+
+  const respuesta = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tavilyKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ query, max_results: 5, include_answer: true }),
+  });
+
+  if (!respuesta.ok) {
+    return `La búsqueda falló (${respuesta.status}) — respondé solo con lo que ya tenés, o marcá el dato como no verificado.`;
+  }
+
+  const datos = await respuesta.json();
+  const resumen = datos.answer ? `Resumen: ${datos.answer}\n\n` : "";
+  const resultados = ((datos.results ?? []) as Array<{ title: string; content: string; url: string }>)
+    .slice(0, 5)
+    .map((r) => `- ${r.title}: ${(r.content ?? "").slice(0, 300)} (fuente: ${r.url})`)
+    .join("\n");
+
+  return resultados ? `${resumen}${resultados}` : "Sin resultados para esa búsqueda.";
+}
+
+// ---------- NVIDIA NIM (API OpenAI-compatible, con tool-calling) ----------
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MODELO_TEXTO = Deno.env.get("NVIDIA_MODEL_TEXTO") ?? "meta/llama-3.3-70b-instruct";
+const MAX_RONDAS_HERRAMIENTA = 3;
 
-async function llamarNvidiaChat(messages: Array<{ role: string; content: string }>): Promise<string> {
+const HERRAMIENTAS = [
+  {
+    type: "function",
+    function: {
+      name: "buscar_web",
+      description:
+        "Busca en internet información actual: lineup confirmado de hoy, clima, noticias recientes del pitcher o el rival, cuotas. Úsala cuando el contexto ya dado no alcance o pueda estar desactualizado.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Términos de búsqueda, en español o inglés" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+];
+
+interface NvidiaMensaje {
+  role: string;
+  content: string | null;
+  tool_call_id?: string;
+  tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+}
+
+interface ResultadoChatConHerramientas {
+  contenido: string;
+  busquedasRealizadas: Array<{ query: string; resultado: string }>;
+}
+
+async function llamarNvidiaChatConHerramientas(
+  mensajesIniciales: NvidiaMensaje[],
+): Promise<ResultadoChatConHerramientas> {
   const apiKey = Deno.env.get("NVIDIA_API_KEY");
   if (!apiKey) {
     throw new Error(
@@ -211,26 +274,54 @@ async function llamarNvidiaChat(messages: Array<{ role: string; content: string 
     );
   }
 
-  const respuesta = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: MODELO_TEXTO,
-      messages,
-      temperature: 0.2,
-      max_tokens: 1024,
-      response_format: { type: "json_object" },
-    }),
-  });
+  const mensajes: NvidiaMensaje[] = [...mensajesIniciales];
+  const busquedasRealizadas: Array<{ query: string; resultado: string }> = [];
 
-  if (!respuesta.ok) {
-    throw new Error(`NVIDIA API respondió ${respuesta.status}: ${await respuesta.text()}`);
+  for (let ronda = 0; ronda < MAX_RONDAS_HERRAMIENTA; ronda++) {
+    const respuesta = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODELO_TEXTO,
+        messages: mensajes,
+        tools: HERRAMIENTAS,
+        tool_choice: "auto",
+        temperature: 0.2,
+        max_tokens: 1024,
+      }),
+    });
+
+    if (!respuesta.ok) {
+      throw new Error(`NVIDIA API respondió ${respuesta.status}: ${await respuesta.text()}`);
+    }
+
+    const datos = await respuesta.json();
+    const mensaje = datos?.choices?.[0]?.message as NvidiaMensaje | undefined;
+    if (!mensaje) throw new Error("Respuesta de NVIDIA sin mensaje.");
+
+    if (mensaje.tool_calls && mensaje.tool_calls.length > 0) {
+      mensajes.push(mensaje);
+      for (const llamada of mensaje.tool_calls) {
+        let query = "";
+        try {
+          query = JSON.parse(llamada.function.arguments).query ?? "";
+        } catch {
+          // argumentos mal formados del modelo — seguimos con query vacía, buscarWeb la maneja
+        }
+        const resultado = query ? await buscarWeb(query) : "Falta el término de búsqueda.";
+        busquedasRealizadas.push({ query, resultado });
+        mensajes.push({ role: "tool", tool_call_id: llamada.id, content: resultado });
+      }
+      continue; // pedirle al modelo que siga con los resultados de la búsqueda
+    }
+
+    if (typeof mensaje.content !== "string") {
+      throw new Error("Respuesta de NVIDIA sin contenido de texto esperado.");
+    }
+    return { contenido: mensaje.content, busquedasRealizadas };
   }
 
-  const datos = await respuesta.json();
-  const contenido = datos?.choices?.[0]?.message?.content;
-  if (typeof contenido !== "string") throw new Error("Respuesta de NVIDIA sin contenido de texto esperado.");
-  return contenido;
+  throw new Error(`La IA encadenó más de ${MAX_RONDAS_HERRAMIENTA} búsquedas sin dar una respuesta final.`);
 }
 
 function parsearJsonModelo<T>(contenido: string): T {
@@ -256,12 +347,20 @@ interface SolicitudAnalisis {
   ultimasNSalidas?: number;
 }
 
+interface PropuestaAprendizaje {
+  descubrimiento: string;
+  fuente: string;
+  regla_nueva: string | null;
+  por_que_importa: string | null;
+}
+
 interface JuicioIA {
   confianza: number;
   nivel: "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
   veredicto: "OVER" | "UNDER" | "NO_BET";
   motivo: string;
   factores_clave: string[];
+  propuesta_aprendizaje: PropuestaAprendizaje | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -336,18 +435,20 @@ Deno.serve(async (req: Request) => {
     .join("\n\n");
 
   let juicioIA: JuicioIA;
+  let busquedasRealizadas: Array<{ query: string; resultado: string }> = [];
   try {
-    const contenidoIA = await llamarNvidiaChat([
+    const resultado = await llamarNvidiaChatConHerramientas([
       { role: "system", content: `${FRAMEWORK_SISTEMA}\n\n${contextoCalibracion(bandas)}` },
       { role: "user", content: mensajeUsuario },
     ]);
-    juicioIA = parsearJsonModelo<JuicioIA>(contenidoIA);
+    juicioIA = parsearJsonModelo<JuicioIA>(resultado.contenido);
+    busquedasRealizadas = resultado.busquedasRealizadas;
   } catch (error) {
     return new Response(JSON.stringify({ error: (error as Error).message }), { status: 502 });
   }
 
   return new Response(
-    JSON.stringify({ calculada, juicioIA, contextoCalibracionUsado: bandas }),
+    JSON.stringify({ calculada, juicioIA, contextoCalibracionUsado: bandas, busquedasRealizadas }),
     { headers: { "Content-Type": "application/json" } },
   );
 });
