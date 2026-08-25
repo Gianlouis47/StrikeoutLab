@@ -53,12 +53,15 @@ export function Boton({
   variante = "primario",
   cargando = false,
   deshabilitado = false,
+  etiquetaAccesible,
 }: {
   titulo: string;
   onPress: () => void;
   variante?: "primario" | "secundario" | "peligro";
   cargando?: boolean;
   deshabilitado?: boolean;
+  /** Etiqueta accesible cuando `titulo` no basta por sí solo. Por defecto usa `titulo`. */
+  etiquetaAccesible?: string;
 }) {
   const estiloVariante =
     variante === "primario"
@@ -66,16 +69,20 @@ export function Boton({
       : variante === "peligro"
         ? estilos.botonPeligro
         : estilos.botonSecundario;
+  const deshabilitadoEfectivo = cargando || deshabilitado;
 
   return (
     <Pressable
       onPress={onPress}
-      disabled={cargando || deshabilitado}
+      disabled={deshabilitadoEfectivo}
+      accessibilityRole="button"
+      accessibilityLabel={etiquetaAccesible ?? titulo}
+      accessibilityState={{ disabled: deshabilitadoEfectivo, busy: cargando }}
       style={({ pressed }) => [
         estilos.boton,
         estiloVariante,
-        (deshabilitado || cargando) && estilos.botonDeshabilitado,
-        pressed && !deshabilitado && !cargando && estilos.botonPresionado,
+        deshabilitadoEfectivo && estilos.botonDeshabilitado,
+        pressed && !deshabilitadoEfectivo && estilos.botonPresionado,
       ]}
     >
       {cargando ? (
@@ -84,6 +91,33 @@ export function Boton({
         <Text style={estilos.botonTexto}>{titulo}</Text>
       )}
     </Pressable>
+  );
+}
+
+/** Estado vacío reutilizable: listas sin datos, primer uso. Nunca una
+ * pantalla en blanco — siempre se indica el siguiente paso. Patrón de
+ * app-movil-base/_core/components/EstadoVacio.tsx. */
+export function EstadoVacio({
+  titulo,
+  descripcion,
+  tituloAccion,
+  onAccion,
+}: {
+  titulo: string;
+  descripcion?: string;
+  tituloAccion?: string;
+  onAccion?: () => void;
+}) {
+  return (
+    <View style={estilos.estadoVacioContenedor}>
+      <Text style={estilos.estadoVacioTitulo}>{titulo}</Text>
+      {!!descripcion && <Text style={estilos.estadoVacioDescripcion}>{descripcion}</Text>}
+      {!!tituloAccion && !!onAccion && (
+        <View style={{ marginTop: 16, minWidth: 180 }}>
+          <Boton titulo={tituloAccion} onPress={onAccion} />
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -169,6 +203,7 @@ export const estilos = StyleSheet.create({
     paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",
+    minHeight: 44, // área táctil mínima recomendada
   },
   botonPrimario: { backgroundColor: colores.acento },
   botonSecundario: { backgroundColor: "#232d47" },
@@ -196,5 +231,22 @@ export const estilos = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+  },
+  estadoVacioContenedor: {
+    alignItems: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+  },
+  estadoVacioTitulo: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colores.texto,
+    textAlign: "center",
+  },
+  estadoVacioDescripcion: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    textAlign: "center",
+    marginTop: 6,
   },
 });

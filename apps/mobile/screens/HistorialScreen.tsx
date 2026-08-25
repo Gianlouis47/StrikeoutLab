@@ -1,7 +1,8 @@
 import React, { useCallback, useState } from "react";
 import { FlatList, RefreshControl, Text, View } from "react-native";
-import { Boton, Campo, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
-import { supabase } from "../lib/supabase";
+import { Boton, Campo, EstadoVacio, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
+import { repositorio } from "../lib/supabase-repository";
+import { resultadoPickSchema } from "../lib/validators";
 
 interface FilaPick {
   id: string;
@@ -33,13 +34,18 @@ export default function HistorialScreen() {
 
   const cargar = useCallback(async () => {
     setCargando(true);
-    const { data, error } = await supabase
-      .from("picks")
-      .select("id, fecha, pitcher, equipo, rival, linea, pick, confianza, nivel, fuente_confianza, resultado_k, resultado")
-      .order("fecha", { ascending: false })
-      .limit(100);
-    if (error) setError(error.message);
-    else setPicks((data ?? []) as FilaPick[]);
+    setError(null);
+    try {
+      const filas = await repositorio.listar<FilaPick>("picks", {
+        seleccionar: "id, fecha, pitcher, equipo, rival, linea, pick, confianza, nivel, fuente_confianza, resultado_k, resultado",
+        ordenarPor: "fecha",
+        ascendente: false,
+        limite: 100,
+      });
+      setPicks(filas);
+    } catch (e) {
+      setError((e as Error).message);
+    }
     setCargando(false);
   }, []);
 
@@ -48,14 +54,15 @@ export default function HistorialScreen() {
   }, [cargar]);
 
   async function guardarResultado(id: string) {
-    const k = parseInt(kIngresado, 10);
-    if (Number.isNaN(k) || k < 0) {
-      setError("Ponches debe ser un número entero >= 0.");
+    const validacion = resultadoPickSchema.safeParse({ resultadoK: parseInt(kIngresado, 10) });
+    if (!validacion.success) {
+      setError(validacion.error.issues[0]?.message ?? "Ponches inválidos.");
       return;
     }
-    const { error } = await supabase.from("picks").update({ resultado_k: k }).eq("id", id);
-    if (error) {
-      setError(error.message);
+    try {
+      await repositorio.actualizar("picks", id, { resultado_k: validacion.data.resultadoK });
+    } catch (e) {
+      setError((e as Error).message);
       return;
     }
     setEditando(null);
@@ -74,6 +81,14 @@ export default function HistorialScreen() {
             <Subtitulo>Toca un pick pendiente para registrar el resultado real</Subtitulo>
             {error && <Mensaje tipo="error" texto={error} />}
           </View>
+        }
+        ListEmptyComponent={
+          !cargando ? (
+            <EstadoVacio
+              titulo="Todavía no registraste ningún pick"
+              descripcion="Andá a Nuevo Pick para agregar el primero."
+            />
+          ) : null
         }
         data={picks}
         keyExtractor={(item) => item.id}

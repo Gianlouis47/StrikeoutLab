@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, Text, View } from "react-native";
 import { Boton, colores, estilos } from "./components/ui";
+import { confirmarAccion } from "./lib/confirmacion";
 import type { DatosExtraidosFoto } from "./lib/edgeFunctions";
 import { supabase } from "./lib/supabase";
 import AnalizarFotoScreen from "./screens/AnalizarFotoScreen";
@@ -104,7 +105,18 @@ export default function App() {
       </View>
 
       <View style={{ paddingHorizontal: 12, paddingBottom: 4 }}>
-        <Boton titulo="Cerrar sesión" variante="secundario" onPress={() => supabase.auth.signOut()} />
+        <Boton
+          titulo="Cerrar sesión"
+          variante="secundario"
+          onPress={() =>
+            confirmarAccion({
+              titulo: "¿Cerrar sesión?",
+              mensaje: "Vas a tener que volver a iniciar sesión para usar la app.",
+              tituloBotonConfirmar: "Cerrar sesión",
+              onConfirmar: () => supabase.auth.signOut(),
+            })
+          }
+        />
       </View>
 
       <StatusBar style="light" />

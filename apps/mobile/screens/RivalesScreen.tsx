@@ -1,10 +1,18 @@
 import { compararRivales } from "@strikeoutlab/core";
 import React, { useCallback, useState } from "react";
 import { FlatList, RefreshControl, Text, View } from "react-native";
-import { Boton, Campo, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
-import { supabase } from "../lib/supabase";
+import { Boton, Campo, EstadoVacio, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
+import { repositorio } from "../lib/supabase-repository";
+import { equipoTeamKSchema } from "../lib/validators";
 
 type Ventana = "TEMPORADA" | "ULTIMOS_14";
+
+interface FilaTeamK {
+  id: string;
+  equipo: string;
+  k: number;
+  pa: number;
+}
 
 export default function RivalesScreen() {
   const [ventana, setVentana] = useState<Ventana>("TEMPORADA");
@@ -20,13 +28,15 @@ export default function RivalesScreen() {
   const cargar = useCallback(async (v: Ventana) => {
     setCargando(true);
     setError(null);
-    const { data, error } = await supabase.from("team_k").select("equipo, k, pa").eq("ventana", v);
-    if (error) {
-      setError(error.message);
-      setCargando(false);
-      return;
+    try {
+      const filas = await repositorio.listar<FilaTeamK>("team_k", {
+        seleccionar: "id, equipo, k, pa",
+        filtro: { ventana: v },
+      });
+      setRanking(compararRivales(filas));
+    } catch (e) {
+      setError((e as Error).message);
     }
-    setRanking(compararRivales(data ?? []));
     setCargando(false);
   }, []);
 
@@ -35,28 +45,32 @@ export default function RivalesScreen() {
   }, [ventana, cargar]);
 
   async function agregarEquipo() {
-    const kNum = parseInt(k, 10);
-    const paNum = parseInt(pa, 10);
-    if (!equipo || Number.isNaN(kNum) || Number.isNaN(paNum) || paNum <= 0) {
-      setError("Completa equipo, K y PA (PA > 0).");
+    const validacion = equipoTeamKSchema.safeParse({
+      equipo: equipo.toUpperCase(),
+      ventana,
+      k: parseInt(k, 10),
+      pa: parseInt(pa, 10),
+      fechaCorte: new Date().toISOString().slice(0, 10),
+    });
+    if (!validacion.success) {
+      setError(validacion.error.issues[0]?.message ?? "Datos inválidos.");
       return;
     }
+
     setGuardando(true);
-    const { error } = await supabase.from("team_k").upsert(
-      {
-        equipo: equipo.toUpperCase(),
-        ventana,
-        k: kNum,
-        pa: paNum,
-        fecha_corte: new Date().toISOString().slice(0, 10),
-      },
-      { onConflict: "equipo,ventana,fecha_corte" },
-    );
-    setGuardando(false);
-    if (error) {
-      setError(error.message);
+    try {
+      const datos = validacion.data;
+      await repositorio.upsert(
+        "team_k",
+        { equipo: datos.equipo, ventana: datos.ventana, k: datos.k, pa: datos.pa, fecha_corte: datos.fechaCorte },
+        "equipo,ventana,fecha_corte",
+      );
+    } catch (e) {
+      setError((e as Error).message);
+      setGuardando(false);
       return;
     }
+    setGuardando(false);
     setEquipo("");
     setK("");
     setPa("");
@@ -94,6 +108,14 @@ export default function RivalesScreen() {
             </Tarjeta>
             {error && <Mensaje tipo="error" texto={error} />}
           </View>
+        }
+        ListEmptyComponent={
+          !cargando ? (
+            <EstadoVacio
+              titulo="Sin equipos en esta ventana"
+              descripcion="Agregá uno arriba (equipo, K total y PA) para empezar el ranking."
+            />
+          ) : null
         }
         data={ranking}
         keyExtractor={(item, i) => `${item.equipo}-${i}`}

@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { Boton, Campo, Mensaje, SelectorPick, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
 import { analizarPitcher, type AnalizarPitcherRespuesta, type DatosExtraidosFoto } from "../lib/edgeFunctions";
-import { supabase } from "../lib/supabase";
+import { repositorio } from "../lib/supabase-repository";
+import { pickNuevoSchema } from "../lib/validators";
 
 const NIVELES = ["DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"] as const;
 
@@ -79,32 +80,41 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   async function guardarPick(fuenteConfianza: "CALCULADA" | "JUICIO") {
     setError(null);
     setOk(null);
-    const confianzaNum = parseFloat(confianza) / 100;
-    if (!pitcher || !equipo || !rival || !linea || !confianza) {
-      setError("Faltan campos requeridos.");
-      return;
-    }
-    if (Number.isNaN(confianzaNum) || confianzaNum < 0 || confianzaNum > 1) {
-      setError("Confianza debe ser un número entre 0 y 100.");
+
+    const validacion = pickNuevoSchema.safeParse({
+      fecha,
+      codigo: codigo || null,
+      pitcher,
+      equipo,
+      rival,
+      linea: parseFloat(linea),
+      pick,
+      confianza: parseFloat(confianza) / 100,
+      nivel,
+      fuenteConfianza,
+      motivo: respuestaIA?.juicioIA.motivo ?? null,
+    });
+    if (!validacion.success) {
+      setError(validacion.error.issues[0]?.message ?? "Datos inválidos.");
       return;
     }
 
     setGuardando(true);
     try {
-      const { error } = await supabase.from("picks").insert({
-        fecha,
-        codigo: codigo || null,
-        pitcher,
-        equipo,
-        rival,
-        linea: parseFloat(linea),
-        pick,
-        confianza: confianzaNum,
-        nivel,
-        fuente_confianza: fuenteConfianza,
-        motivo: respuestaIA?.juicioIA.motivo ?? null,
+      const datos = validacion.data;
+      await repositorio.crear("picks", {
+        fecha: datos.fecha,
+        codigo: datos.codigo,
+        pitcher: datos.pitcher,
+        equipo: datos.equipo,
+        rival: datos.rival,
+        linea: datos.linea,
+        pick: datos.pick,
+        confianza: datos.confianza,
+        nivel: datos.nivel,
+        fuente_confianza: datos.fuenteConfianza,
+        motivo: datos.motivo,
       });
-      if (error) throw error;
       setOk("Pick guardado.");
       setPitcher("");
       setEquipo("");

@@ -1,10 +1,11 @@
 import { reporteCalibracion, resumenEconomico, type PickCalibracion, type PickEconomico } from "@strikeoutlab/core";
 import React, { useCallback, useState } from "react";
 import { FlatList, RefreshControl, Text, View } from "react-native";
-import { Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
-import { supabase } from "../lib/supabase";
+import { EstadoVacio, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
+import { repositorio } from "../lib/supabase-repository";
 
 interface FilaPickDb {
+  id: string;
   confianza: number;
   resultado: "GANO" | "PERDIO" | "EMPATE" | null;
   fuente_confianza: "CALCULADA" | "JUICIO";
@@ -23,17 +24,17 @@ export default function DashboardScreen() {
   const cargar = useCallback(async () => {
     setCargando(true);
     setError(null);
-    const { data, error } = await supabase
-      .from("picks")
-      .select("confianza, resultado, fuente_confianza, nivel, ticket_id, stake, payout");
 
-    if (error) {
-      setError(error.message);
+    let filas: FilaPickDb[];
+    try {
+      filas = await repositorio.listar<FilaPickDb>("picks", {
+        seleccionar: "id, confianza, resultado, fuente_confianza, nivel, ticket_id, stake, payout",
+      });
+    } catch (e) {
+      setError((e as Error).message);
       setCargando(false);
       return;
     }
-
-    const filas = (data ?? []) as FilaPickDb[];
 
     const picksCalibracion: PickCalibracion[] = filas.map((f) => ({
       confianza: f.confianza,
@@ -70,7 +71,10 @@ export default function DashboardScreen() {
             </View>
             {error && <Mensaje tipo="error" texto={error} />}
             {!error && bandas.length === 0 && !cargando && (
-              <Mensaje tipo="info" texto="Aún no hay picks resueltos suficientes para calibrar." />
+              <EstadoVacio
+                titulo="Todavía no hay nada que calibrar"
+                descripcion="Registrá picks en Nuevo Pick y anotá sus resultados en Historial — apenas haya suficientes, este panel te muestra si tus confianzas se sostienen."
+              />
             )}
           </View>
         }
