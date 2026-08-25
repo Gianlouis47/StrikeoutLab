@@ -14,6 +14,14 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, "node_modules"),
   path.resolve(workspaceRoot, "node_modules"),
 ];
-config.resolver.disableHierarchicalLookup = true;
+
+// Mapeo explícito del paquete del workspace a su carpeta real. Sin esto,
+// Metro depende de que exista el symlink node_modules/@strikeoutlab/core
+// que crea `npm install`; en el builder de EAS ese symlink no siempre
+// sobrevive y el bundle falla con "Unable to resolve module".
+config.resolver.extraNodeModules = {
+  ...config.resolver.extraNodeModules,
+  "@strikeoutlab/core": path.resolve(workspaceRoot, "packages/core"),
+};
 
 module.exports = config;
