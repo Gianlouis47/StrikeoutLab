@@ -6,6 +6,20 @@ import { repositorio } from "../lib/supabase-repository";
 import { aprendizajeNuevoSchema, pickNuevoSchema } from "../lib/validators";
 
 const NIVELES = ["DIAMANTE_ALTO", "DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"] as const;
+const ETIQUETA_NIVEL: Record<(typeof NIVELES)[number], string> = {
+  DIAMANTE_ALTO: "Diamante Alto",
+  DIAMANTE: "Diamante",
+  ORO_ALTO: "Oro Alto",
+  ORO: "Oro",
+  IMPUREZA: "Impureza",
+};
+const RANGO_NIVEL: Record<(typeof NIVELES)[number], string> = {
+  DIAMANTE_ALTO: "95-100%",
+  DIAMANTE: "90-94%",
+  ORO_ALTO: "85-89%",
+  ORO: "80-84%",
+  IMPUREZA: "79% o menos",
+};
 
 export interface BorradorPick {
   datos: DatosExtraidosFoto;
@@ -337,12 +351,16 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       />
 
       <View>
-        <Text style={estilos.etiqueta}>NIVEL</Text>
-        <View style={estilos.filaSelector}>
+        <Text style={estilos.etiqueta}>NIVEL — qué tan segura es esta jugada</Text>
+        <Text style={{ color: colores.textoSuave, fontSize: 12, marginBottom: 6 }}>
+          Va de la mano con el % de confianza de arriba: {RANGO_NIVEL[nivel]} = {ETIQUETA_NIVEL[nivel]}. De 85% para
+          arriba es donde conviene más jugar; Impureza (79% o menos) normalmente no se juega.
+        </Text>
+        <View style={[estilos.filaSelector, { flexWrap: "wrap" }]}>
           {NIVELES.map((n) => (
             <Boton
               key={n}
-              titulo={n}
+              titulo={ETIQUETA_NIVEL[n]}
               variante={nivel === n ? "primario" : "secundario"}
               onPress={() => setNivel(n)}
             />
@@ -353,8 +371,12 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       {error && <Mensaje tipo="error" texto={error} />}
       {ok && <Mensaje tipo="exito" texto={ok} />}
 
+      <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+        CALCULADA = salió de contar resultados reales de este pitcher (más confiable). JUICIO = es tu opinión o la de
+        la IA, no un conteo real — usalo para todo lo que no venga de historial real.
+      </Text>
       <Boton
-        titulo="Guardar como CALCULADA (viene de tasaSuperacionLinea)"
+        titulo="Guardar como CALCULADA (de su historial real)"
         onPress={() => guardarPick("CALCULADA")}
         cargando={guardando}
       />
