@@ -196,12 +196,13 @@ PublishScripts/
 *.nupkg
 # NuGet Symbol Packages
 *.snupkg
-# The packages folder can be ignored because of Package Restore
-**/[Pp]ackages/*
-# except build/, which is used as an MSBuild target.
-!**/[Pp]ackages/build/
-# Uncomment if necessary however generally it will be regenerated when needed
-#!**/[Pp]ackages/repositories.config
+# Nota: la regla original de .NET acá era "**/[Pp]ackages/*", que ignora
+# TODO el contenido de cualquier carpeta "packages/" — eso se comía
+# nuestro workspace de npm en packages/core (el uploader de EAS no
+# respeta las negaciones "!packages/..." de más abajo de la misma forma
+# que git, así que packages/core nunca llegaba al builder). Este repo no
+# tiene proyectos .NET, así que se saca del todo en vez de parchear con
+# más negaciones.
 # NuGet v3's project.json files produces more ignorable files
 *.nuget.props
 *.nuget.targets
@@ -363,21 +364,6 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # StrikeoutLab (TypeScript / Supabase / Expo)
-#
-# The NuGet "**/[Pp]ackages/*" rule above (line ~200, from the .NET
-# template this .gitignore started from) would otherwise swallow our
-# entire npm workspace at packages/core. Un-ignore only its real source
-# files (not a blanket **, which would also re-include any node_modules/
-# or build cache a tool creates inside packages/core).
-!packages/
-!packages/core/
-!packages/core/src/
-!packages/core/src/**
-!packages/core/test/
-!packages/core/test/**
-!packages/core/package.json
-!packages/core/tsconfig.json
-
 dist/
 *.tsbuildinfo
 .env
