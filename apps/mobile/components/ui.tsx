@@ -1,3 +1,5 @@
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import React from "react";
 import {
   ActivityIndicator,
@@ -9,28 +11,49 @@ import {
   View,
 } from "react-native";
 
+// Paleta con escala de superficie (fondo -> tarjeta -> tarjetaElevada) en vez
+// de blanco/negro invertido — la profundidad se comunica con superficies más
+// claras, no con sombras pesadas (estándar 2026 de dashboards oscuros).
 export const colores = {
-  fondo: "#0b1220",
-  tarjeta: "#141b2d",
-  borde: "#25304a",
-  texto: "#e8ecf4",
-  textoSuave: "#93a1c1",
+  fondo: "#0b0e13",
+  tarjeta: "#12151c",
+  tarjetaElevada: "#181d27",
+  borde: "#242a38",
+  texto: "#eef1f6",
+  textoSuave: "#8b93a7",
   acento: "#4f8cff",
-  exito: "#3ecf8e",
-  peligro: "#ff6b6b",
-  advertencia: "#f5b342",
+  acentoSecundario: "#8b5cf6",
+  exito: "#34d399",
+  peligro: "#f87171",
+  advertencia: "#fbbf24",
 };
 
+export const degradadoAcento = [colores.acento, colores.acentoSecundario] as const;
+
 export function Titulo({ children }: { children: React.ReactNode }) {
-  return <Text style={estilos.titulo}>{children}</Text>;
+  return (
+    <View style={estilos.tituloFila}>
+      <LinearGradient colors={degradadoAcento} style={estilos.tituloBarra} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} />
+      <Text style={estilos.titulo}>{children}</Text>
+    </View>
+  );
 }
 
 export function Subtitulo({ children }: { children: React.ReactNode }) {
   return <Text style={estilos.subtitulo}>{children}</Text>;
 }
 
-export function Tarjeta({ children, style }: { children: React.ReactNode; style?: object }) {
-  return <View style={[estilos.tarjeta, style]}>{children}</View>;
+export function Tarjeta({
+  children,
+  style,
+  elevada = false,
+}: {
+  children: React.ReactNode;
+  style?: object;
+  /** Superficie más clara, para destacar la tarjeta más importante de la pantalla. */
+  elevada?: boolean;
+}) {
+  return <View style={[estilos.tarjeta, elevada && estilos.tarjetaElevada, style]}>{children}</View>;
 }
 
 export function Campo(props: TextInputProps & { etiqueta: string }) {
@@ -63,13 +86,29 @@ export function Boton({
   /** Etiqueta accesible cuando `titulo` no basta por sí solo. Por defecto usa `titulo`. */
   etiquetaAccesible?: string;
 }) {
-  const estiloVariante =
-    variante === "primario"
-      ? estilos.botonPrimario
-      : variante === "peligro"
-        ? estilos.botonPeligro
-        : estilos.botonSecundario;
   const deshabilitadoEfectivo = cargando || deshabilitado;
+  const contenido = cargando ? (
+    <ActivityIndicator color={colores.texto} />
+  ) : (
+    <Text style={estilos.botonTexto}>{titulo}</Text>
+  );
+
+  if (variante === "primario") {
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={deshabilitadoEfectivo}
+        accessibilityRole="button"
+        accessibilityLabel={etiquetaAccesible ?? titulo}
+        accessibilityState={{ disabled: deshabilitadoEfectivo, busy: cargando }}
+        style={({ pressed }) => [deshabilitadoEfectivo && estilos.botonDeshabilitado, pressed && estilos.botonPresionado]}
+      >
+        <LinearGradient colors={degradadoAcento} style={estilos.boton} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+          {contenido}
+        </LinearGradient>
+      </Pressable>
+    );
+  }
 
   return (
     <Pressable
@@ -80,16 +119,12 @@ export function Boton({
       accessibilityState={{ disabled: deshabilitadoEfectivo, busy: cargando }}
       style={({ pressed }) => [
         estilos.boton,
-        estiloVariante,
+        variante === "peligro" ? estilos.botonPeligro : estilos.botonSecundario,
         deshabilitadoEfectivo && estilos.botonDeshabilitado,
         pressed && !deshabilitadoEfectivo && estilos.botonPresionado,
       ]}
     >
-      {cargando ? (
-        <ActivityIndicator color={colores.texto} />
-      ) : (
-        <Text style={estilos.botonTexto}>{titulo}</Text>
-      )}
+      {contenido}
     </Pressable>
   );
 }
@@ -143,11 +178,44 @@ export function SelectorPick({
   );
 }
 
+const ICONO_MENSAJE = {
+  error: "close-circle" as const,
+  exito: "checkmark-circle" as const,
+  info: "information-circle" as const,
+};
+
 export function Mensaje({ tipo, texto }: { tipo: "error" | "info" | "exito"; texto: string }) {
   const color = tipo === "error" ? colores.peligro : tipo === "exito" ? colores.exito : colores.advertencia;
   return (
-    <View style={[estilos.mensaje, { borderColor: color }]}>
-      <Text style={{ color }}>{texto}</Text>
+    <View style={[estilos.mensaje, { backgroundColor: color + "1a", borderColor: color + "40" }]}>
+      <Ionicons name={ICONO_MENSAJE[tipo]} size={18} color={color} />
+      <Text style={[estilos.mensajeTexto, { color }]}>{texto}</Text>
+    </View>
+  );
+}
+
+/** Insignia/pill para etiquetas cortas: nivel de pureza, fuente_confianza,
+ * advertencias de calibración inline (ej. "sobreconfiado 12 pts"). */
+export function Insignia({
+  texto,
+  tono = "neutral",
+}: {
+  texto: string;
+  tono?: "neutral" | "exito" | "peligro" | "advertencia" | "acento";
+}) {
+  const color =
+    tono === "exito"
+      ? colores.exito
+      : tono === "peligro"
+        ? colores.peligro
+        : tono === "advertencia"
+          ? colores.advertencia
+          : tono === "acento"
+            ? colores.acento
+            : colores.textoSuave;
+  return (
+    <View style={[estilos.insignia, { backgroundColor: color + "1f", borderColor: color + "45" }]}>
+      <Text style={[estilos.insigniaTexto, { color }]}>{texto}</Text>
     </View>
   );
 }
@@ -161,23 +229,37 @@ export const estilos = StyleSheet.create({
     padding: 16,
     gap: 16,
   },
+  tituloFila: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  tituloBarra: {
+    width: 4,
+    height: 22,
+    borderRadius: 2,
+  },
   titulo: {
     color: colores.texto,
-    fontSize: 22,
-    fontWeight: "700",
+    fontSize: 23,
+    fontWeight: "800",
+    letterSpacing: 0.2,
   },
   subtitulo: {
     color: colores.textoSuave,
     fontSize: 14,
-    marginTop: -8,
   },
   tarjeta: {
     backgroundColor: colores.tarjeta,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colores.borde,
-    padding: 14,
+    padding: 16,
     gap: 8,
+  },
+  tarjetaElevada: {
+    backgroundColor: colores.tarjetaElevada,
+    borderColor: colores.acento + "55",
   },
   campoContenedor: {
     gap: 4,
@@ -189,28 +271,27 @@ export const estilos = StyleSheet.create({
     letterSpacing: 0.5,
   },
   input: {
-    backgroundColor: "#0f1626",
+    backgroundColor: "#0f131c",
     borderWidth: 1,
     borderColor: colores.borde,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     color: colores.texto,
     fontSize: 15,
   },
   boton: {
-    borderRadius: 8,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingVertical: 13,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 44, // área táctil mínima recomendada
+    minHeight: 46, // área táctil mínima recomendada
   },
-  botonPrimario: { backgroundColor: colores.acento },
-  botonSecundario: { backgroundColor: "#232d47" },
+  botonSecundario: { backgroundColor: colores.tarjetaElevada, borderWidth: 1, borderColor: colores.borde },
   botonPeligro: { backgroundColor: colores.peligro },
   botonDeshabilitado: { opacity: 0.5 },
   botonPresionado: { opacity: 0.85 },
-  botonTexto: { color: "#fff", fontWeight: "600", fontSize: 15 },
+  botonTexto: { color: "#fff", fontWeight: "700", fontSize: 15 },
   filaSelector: { flexDirection: "row", gap: 8 },
   chip: {
     paddingVertical: 8,
@@ -218,14 +299,34 @@ export const estilos = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: colores.borde,
+    backgroundColor: colores.tarjeta,
   },
   chipActivo: { backgroundColor: colores.acento, borderColor: colores.acento },
   chipTexto: { color: colores.textoSuave, fontWeight: "600" },
   chipTextoActivo: { color: "#fff" },
   mensaje: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     borderWidth: 1,
-    borderRadius: 8,
-    padding: 10,
+    borderRadius: 12,
+    padding: 12,
+  },
+  mensajeTexto: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  insignia: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+  },
+  insigniaTexto: {
+    fontSize: 11,
+    fontWeight: "700",
   },
   filaEntreEspacio: {
     flexDirection: "row",

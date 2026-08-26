@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
@@ -15,13 +16,13 @@ import ParlayScreen from "./screens/ParlayScreen";
 import RivalesScreen from "./screens/RivalesScreen";
 
 const PESTANAS = [
-  { id: "dashboard", titulo: "Calibración" },
-  { id: "nuevoPick", titulo: "Nuevo Pick" },
-  { id: "foto", titulo: "Foto" },
-  { id: "historial", titulo: "Historial" },
-  { id: "rivales", titulo: "Rivales" },
-  { id: "parlay", titulo: "Parlay" },
-] as const;
+  { id: "dashboard", titulo: "Calibración", icono: "stats-chart" },
+  { id: "nuevoPick", titulo: "Nuevo Pick", icono: "add-circle" },
+  { id: "foto", titulo: "Foto", icono: "camera" },
+  { id: "historial", titulo: "Historial", icono: "time" },
+  { id: "rivales", titulo: "Rivales", icono: "people" },
+  { id: "parlay", titulo: "Parlay", icono: "layers" },
+] as const satisfies ReadonlyArray<{ id: string; titulo: string; icono: keyof typeof Ionicons.glyphMap }>;
 
 type PestanaId = (typeof PESTANAS)[number]["id"];
 
@@ -85,23 +86,42 @@ export default function App() {
           paddingVertical: 6,
         }}
       >
-        {PESTANAS.map((p) => (
-          <Pressable
-            key={p.id}
-            onPress={() => setPestana(p.id)}
-            style={{ flexBasis: "33%", alignItems: "center", paddingVertical: 8 }}
-          >
-            <Text
-              style={{
-                color: pestana === p.id ? colores.acento : colores.textoSuave,
-                fontWeight: pestana === p.id ? "700" : "400",
-                fontSize: 12,
-              }}
+        {PESTANAS.map((p) => {
+          const activa = pestana === p.id;
+          return (
+            <Pressable
+              key={p.id}
+              onPress={() => setPestana(p.id)}
+              style={{ flexBasis: "33%", alignItems: "center", paddingVertical: 6, gap: 2 }}
             >
-              {p.titulo}
-            </Text>
-          </Pressable>
-        ))}
+              <View
+                style={{
+                  width: 40,
+                  height: 26,
+                  borderRadius: 13,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: activa ? colores.acento + "26" : "transparent",
+                }}
+              >
+                <Ionicons
+                  name={activa ? p.icono : (`${p.icono}-outline` as keyof typeof Ionicons.glyphMap)}
+                  size={18}
+                  color={activa ? colores.acento : colores.textoSuave}
+                />
+              </View>
+              <Text
+                style={{
+                  color: activa ? colores.acento : colores.textoSuave,
+                  fontWeight: activa ? "700" : "400",
+                  fontSize: 11,
+                }}
+              >
+                {p.titulo}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       <View style={{ paddingHorizontal: 12, paddingBottom: 4 }}>

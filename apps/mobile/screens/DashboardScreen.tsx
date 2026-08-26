@@ -1,7 +1,7 @@
 import { reporteCalibracion, resumenEconomico, type PickCalibracion, type PickEconomico } from "@strikeoutlab/core";
 import React, { useCallback, useState } from "react";
 import { FlatList, RefreshControl, Text, View } from "react-native";
-import { EstadoVacio, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
+import { EstadoVacio, Insignia, Mensaje, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
 import { repositorio } from "../lib/supabase-repository";
 
 interface FilaPickDb {
@@ -81,26 +81,25 @@ export default function DashboardScreen() {
         data={bandas}
         keyExtractor={(item) => item.banda}
         renderItem={({ item }) => (
-          <Tarjeta>
+          <Tarjeta elevada={!item.muestraInsuficiente && item.diferencia !== null}>
             <View style={estilos.filaEntreEspacio}>
-              <Text style={{ color: colores.texto, fontWeight: "700" }}>{item.banda}</Text>
-              {item.muestraInsuficiente && (
-                <Text style={{ color: colores.advertencia, fontSize: 12 }}>muestra insuficiente</Text>
-              )}
+              <Text style={{ color: colores.texto, fontWeight: "700", fontSize: 16 }}>{item.banda}</Text>
+              {item.muestraInsuficiente && <Insignia texto="muestra insuficiente" tono="advertencia" />}
             </View>
             <Text style={{ color: colores.textoSuave }}>
               {item.cantidad} picks · confianza promedio {(item.confianzaPromedio * 100).toFixed(1)}%
             </Text>
-            <Text style={{ color: colores.texto }}>
-              Tasa real:{" "}
-              {item.tasaReal !== null ? `${(item.tasaReal * 100).toFixed(1)}%` : "sin decisiones"}
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Text style={{ color: colores.texto }}>
+                Tasa real: {item.tasaReal !== null ? `${(item.tasaReal * 100).toFixed(1)}%` : "sin decisiones"}
+              </Text>
               {item.diferencia !== null && (
-                <Text style={{ color: item.diferencia > 0.05 ? colores.peligro : colores.exito }}>
-                  {"  "}({item.diferencia > 0 ? "sobreconfiado" : "subconfiado"}{" "}
-                  {(Math.abs(item.diferencia) * 100).toFixed(1)} pts)
-                </Text>
+                <Insignia
+                  texto={`${item.diferencia > 0 ? "sobreconfiado" : "subconfiado"} ${(Math.abs(item.diferencia) * 100).toFixed(1)} pts`}
+                  tono={item.diferencia > 0.05 ? "peligro" : "exito"}
+                />
               )}
-            </Text>
+            </View>
           </Tarjeta>
         )}
         ListFooterComponent={
@@ -121,11 +120,16 @@ export default function DashboardScreen() {
               ) : (
                 <Mensaje tipo="info" texto={economico.advertencia ?? "Sin datos de stake/payout"} />
               )}
-              {Object.entries(economico.porNivel).map(([nivel, datos]) => (
-                <Text key={nivel} style={{ color: colores.textoSuave }}>
-                  {nivel}: {datos.cantidad} ({datos.ganadas}G / {datos.perdidas}P / {datos.empates}E)
-                </Text>
-              ))}
+              <View style={{ gap: 6, marginTop: 4 }}>
+                {Object.entries(economico.porNivel).map(([nivel, datos]) => (
+                  <View key={nivel} style={estilos.filaEntreEspacio}>
+                    <Insignia texto={nivel} tono="acento" />
+                    <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+                      {datos.cantidad} · {datos.ganadas}G / {datos.perdidas}P / {datos.empates}E
+                    </Text>
+                  </View>
+                ))}
+              </View>
             </Tarjeta>
           )
         }
