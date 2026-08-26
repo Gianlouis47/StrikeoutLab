@@ -26,3 +26,10 @@ ticket hay que verificar código + jugador + línea. **Estado:** ACTIVO.
 No incorporar una regla con una sola observación ambigua como verdad
 universal. Registrar evidencia, confirmar repeticiones y actualizar la
 skill correspondiente cuando el aprendizaje sea suficientemente sólido.
+
+## Picks IMPUREZA también se registran
+Un pick en IMPUREZA (79% o menos) nunca es una recomendación de apuesta,
+pero sí se guarda en `picks` con su `resultado_k` cuando el juego
+termina — no para jugarlo, sino porque `reporteCalibracion()` necesita
+esas bandas bajas resueltas para confirmar si el corte de 80% sigue
+siendo el correcto o si debe recalibrarse.

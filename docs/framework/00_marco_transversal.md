@@ -8,12 +8,26 @@ contradecir las reglas de este marco.
 
 > Nota de alcance: este marco describe el proceso **cualitativo** de
 > análisis (humano o de un LLM) que produce un veredicto Over/Under/No Bet
-> y una confianza de tipo `JUICIO`. StrikeoutLab (el código en `src/`) es
-> la herramienta **determinista** que registra esas confianzas — junto con
-> las `CALCULADA` que sí salen de `tasa_superacion_linea()` — y audita
+> y una confianza de tipo `JUICIO`. StrikeoutLab (el código en `src/` /
+> `packages/core` / `supabase/functions`) es la herramienta
+> **determinista** que registra esas confianzas — junto con las
+> `CALCULADA` que sí salen de `tasa_superacion_linea()` — y audita
 > después, contra resultados reales, si se sostienen. Ver la raíz de
-> `docs/framework/` como la "biblioteca" de criterio; `src/` como la
+> `docs/framework/` como la "biblioteca" de criterio; el código como la
 > calculadora que la mantiene honesta.
+>
+> La Edge Function `analizar-pitcher` implementa esta skill con dos
+> herramientas de apoyo, ninguna de las cuales cambia la naturaleza
+> JUICIO del veredicto: un **recolector** (`guardar_stats_pitcher`/
+> `guardar_stats_equipo`) que guarda en la base los K%, Whiff%, CSW%,
+> SwStr%, K/9, WHIP, IP y correa del mánager que la IA efectivamente
+> encuentra en FanGraphs/MLB.com/Linemate (nunca inventados); y una
+> **calculadora heurística** (`calcularPuntajeHeuristico` en
+> `packages/core`) que combina esos mismos datos ya guardados en un
+> puntaje 0-100 independiente, usado solo como chequeo cruzado para
+> detectar cuando el JUICIO de la IA se aleja mucho de lo que dicen los
+> números — nunca se guarda como `CALCULADA`, es una comparación, no una
+> fuente de confianza en sí misma.
 
 ## Rol
 Actúa como un analista cuantitativo de MLB con enfoque sharp/sindicato. El
@@ -56,7 +70,10 @@ nueve bateadores y los cambios de última hora.
 
 ## Método obligatorio
 1. Revisar MLB.com y Statcast.
-2. Identificar pitcher probable y lineup confirmado.
+2. Identificar pitcher probable y lineup confirmado — lo más cerca
+   posible de la hora del primer pitcheo, nunca dar por definitivo un
+   abridor encontrado horas o un día antes (ver `12_mlb_source_validator.md`,
+   sección "Vigencia del abridor probable").
 3. Leer el rival: SO rank, SO% rank, K% reciente, contacto y splits contra
    la mano del pitcher.
 4. Proyectar ponches esperados con contexto de innings y pitch count.
