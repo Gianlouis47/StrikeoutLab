@@ -1,0 +1,19 @@
+-- Migración aplicada el 2026-08-27. Resuelve tres problemas que hacían que
+-- la app "no encontrara nada" aunque los datos estuvieran cargados:
+--
+-- 1. La búsqueda de lanzador era por igualdad exacta: un boxscore que dice
+--    "T Rogers" nunca encontraba a "Tyler Rogers".
+-- 2. Cada fuente de datos (MLB Stats API, Savant, FanGraphs) escribía su
+--    propia fila con fecha distinta, y leer solo la más reciente perdía los
+--    campos que esa fuente no traía.
+-- 3. La calculadora puntuaba un pick que vos ya habías elegido, en vez de
+--    proyectar los ponches y deducir el lado sola.
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro. Ver:
+--   - buscar_pitcher(text)        búsqueda tolerante a abreviaciones/acentos
+--   - pitcher_stats_actual        vista que consolida por campo
+--   - proyectar_ponches(...)      la calculadora (log5 + Poisson)
+--
+-- La versión en TypeScript de la misma matemática, con sus pruebas, está en
+-- packages/core/src/proyeccion.ts — ambas deben dar el mismo número.

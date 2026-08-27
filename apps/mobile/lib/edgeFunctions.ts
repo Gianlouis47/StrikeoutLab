@@ -100,6 +100,41 @@ export interface DatosExtraidosFoto {
   otros_datos: Record<string, unknown>;
 }
 
+export interface MensajeChat {
+  rol: "usuario" | "asistente";
+  texto?: string;
+  imagenBase64?: string;
+  mimeType?: string;
+}
+
+export interface RespuestaChat {
+  respuesta: string;
+  transcripciones: Array<{ modelo: string; texto: string }>;
+  herramientasUsadas: Array<{ nombre: string; argumentos: unknown; resultado: unknown }>;
+  razonamiento: string | null;
+  modeloUsado: string;
+}
+
+/**
+ * Única puerta de entrada del análisis: se le manda la conversación (con
+ * fotos si las hay) y del otro lado la IA lee, busca los datos, llama a la
+ * calculadora y responde. No hay que llenar ningún formulario.
+ */
+export async function chat(params: { mensajes: MensajeChat[] }): Promise<RespuestaChat> {
+  const { data, error } = await supabase.functions.invoke<RespuestaChat>("chat", { body: params });
+  if (error) {
+    // El cuerpo de error de la Edge Function trae el motivo real; sin esto
+    // el usuario solo vería "Edge Function returned a non-2xx status code".
+    const detalle = await (error as { context?: { json?: () => Promise<{ error?: string }> } })
+      .context?.json?.()
+      .then((j) => j?.error)
+      .catch(() => undefined);
+    throw new Error(detalle ?? error.message);
+  }
+  if (!data) throw new Error("El chat no devolvió respuesta");
+  return data;
+}
+
 export async function analizarFoto(params: {
   imagenBase64: string;
   mimeType: string;

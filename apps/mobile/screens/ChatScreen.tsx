@@ -1,0 +1,335 @@
+import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+import React, { useCallback, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { Mensaje, colores, estilos } from "../components/ui";
+import { chat, type MensajeChat } from "../lib/edgeFunctions";
+
+interface Burbuja {
+  id: string;
+  rol: "usuario" | "asistente";
+  texto: string;
+  uriImagen?: string;
+  /** Qué hizo la IA por dentro, para poder auditar de dónde salió el número. */
+  detalle?: string[];
+}
+
+const SUGERENCIAS = [
+  "Tirá la foto de un ticket y te digo si conviene",
+  "Foto de un boxscore y guardo la salida",
+  "¿Cuántos K proyecta deGrom con línea 7?",
+];
+
+export default function ChatScreen() {
+  const [burbujas, setBurbujas] = useState<Burbuja[]>([]);
+  const [entrada, setEntrada] = useState("");
+  const [imagenPendiente, setImagenPendiente] = useState<
+    { base64: string; mimeType: string; uri: string } | null
+  >(null);
+  const [pensando, setPensando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listaRef = useRef<FlatList<Burbuja>>(null);
+
+  const irAlFinal = useCallback(() => {
+    setTimeout(() => listaRef.current?.scrollToEnd({ animated: true }), 60);
+  }, []);
+
+  async function adjuntar(desdeCamara: boolean) {
+    setError(null);
+    const permiso = desdeCamara
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permiso.granted) {
+      setError(
+        desdeCamara
+          ? "Necesito permiso de cámara para tomar la foto."
+          : "Necesito permiso de galería para elegir la imagen.",
+      );
+      return;
+    }
+    const opciones: ImagePicker.ImagePickerOptions = { base64: true, quality: 0.6 };
+    const resultado = desdeCamara
+      ? await ImagePicker.launchCameraAsync(opciones)
+      : await ImagePicker.launchImageLibraryAsync(opciones);
+    if (resultado.canceled) return;
+    const asset = resultado.assets[0];
+    if (!asset.base64) {
+      setError("No pude leer esa imagen, probá con otra.");
+      return;
+    }
+    setImagenPendiente({
+      base64: asset.base64,
+      mimeType: asset.mimeType ?? "image/jpeg",
+      uri: asset.uri,
+    });
+  }
+
+  async function enviar() {
+    const texto = entrada.trim();
+    if (!texto && !imagenPendiente) return;
+
+    const propia: Burbuja = {
+      id: `u-${Date.now()}`,
+      rol: "usuario",
+      texto: texto || (imagenPendiente ? "(foto)" : ""),
+      uriImagen: imagenPendiente?.uri,
+    };
+    const historialPrevio = burbujas;
+    setBurbujas((prev) => [...prev, propia]);
+    setEntrada("");
+    const imagen = imagenPendiente;
+    setImagenPendiente(null);
+    setError(null);
+    setPensando(true);
+    irAlFinal();
+
+    // Se manda la conversación completa para que la IA tenga contexto, pero
+    // solo la imagen nueva: las anteriores ya vienen transcritas en el hilo.
+    const mensajes: MensajeChat[] = [
+      ...historialPrevio.map((b) => ({ rol: b.rol, texto: b.texto })),
+      {
+        rol: "usuario" as const,
+        texto,
+        imagenBase64: imagen?.base64,
+        mimeType: imagen?.mimeType,
+      },
+    ];
+
+    try {
+      const r = await chat({ mensajes });
+      const detalle: string[] = [];
+      for (const t of r.transcripciones ?? []) {
+        detalle.push(`Leyó la imagen con ${t.modelo}`);
+      }
+      for (const h of r.herramientasUsadas ?? []) {
+        detalle.push(`Usó ${h.nombre}`);
+      }
+      setBurbujas((prev) => [
+        ...prev,
+        { id: `a-${Date.now()}`, rol: "asistente", texto: r.respuesta, detalle },
+      ]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPensando(false);
+      irAlFinal();
+    }
+  }
+
+  function renderBurbuja({ item }: { item: Burbuja }) {
+    const esUsuario = item.rol === "usuario";
+    return (
+      <View
+        style={{
+          alignSelf: esUsuario ? "flex-end" : "flex-start",
+          maxWidth: "88%",
+          marginBottom: 10,
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: esUsuario ? colores.acento : colores.tarjetaElevada,
+            borderRadius: 16,
+            borderBottomRightRadius: esUsuario ? 4 : 16,
+            borderBottomLeftRadius: esUsuario ? 16 : 4,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderWidth: esUsuario ? 0 : 1,
+            borderColor: colores.borde,
+          }}
+        >
+          {item.uriImagen && (
+            <Image
+              source={{ uri: item.uriImagen }}
+              style={{ width: 200, height: 140, borderRadius: 10, marginBottom: 8 }}
+              resizeMode="cover"
+            />
+          )}
+          <Text
+            style={{
+              color: esUsuario ? "#fff" : colores.texto,
+              fontSize: 15,
+              lineHeight: 21,
+            }}
+          >
+            {item.texto}
+          </Text>
+        </View>
+        {item.detalle && item.detalle.length > 0 && (
+          <Text style={{ color: colores.textoSuave, fontSize: 11, marginTop: 4, marginLeft: 6 }}>
+            {item.detalle.join(" · ")}
+          </Text>
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={8}
+    >
+      <FlatList
+        ref={listaRef}
+        style={estilos.pantalla}
+        contentContainerStyle={{ padding: 14, paddingBottom: 4, flexGrow: 1 }}
+        data={burbujas}
+        keyExtractor={(b) => b.id}
+        renderItem={renderBurbuja}
+        onContentSizeChange={irAlFinal}
+        ListEmptyComponent={
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 20 }}>
+            <Ionicons name="baseball" size={44} color={colores.acento} />
+            <Text
+              style={{
+                color: colores.texto,
+                fontSize: 19,
+                fontWeight: "700",
+                marginTop: 14,
+                textAlign: "center",
+              }}
+            >
+              Mandame la foto y yo hago el resto
+            </Text>
+            <Text
+              style={{
+                color: colores.textoSuave,
+                fontSize: 13,
+                marginTop: 8,
+                textAlign: "center",
+                lineHeight: 19,
+              }}
+            >
+              Leo el ticket o el boxscore, busco las estadísticas, calculo los ponches proyectados y te digo
+              si conviene.
+            </Text>
+            <View style={{ marginTop: 22, gap: 8, width: "100%" }}>
+              {SUGERENCIAS.map((s) => (
+                <View
+                  key={s}
+                  style={{
+                    backgroundColor: colores.tarjeta,
+                    borderWidth: 1,
+                    borderColor: colores.borde,
+                    borderRadius: 12,
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                  }}
+                >
+                  <Text style={{ color: colores.textoSuave, fontSize: 13 }}>{s}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        }
+      />
+
+      {pensando && (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 18, paddingBottom: 6 }}>
+          <ActivityIndicator color={colores.acento} size="small" />
+          <Text style={{ color: colores.textoSuave, fontSize: 13 }}>
+            Leyendo, buscando datos y calculando…
+          </Text>
+        </View>
+      )}
+
+      {error && (
+        <View style={{ paddingHorizontal: 14, paddingBottom: 6 }}>
+          <Mensaje tipo="error" texto={error} />
+        </View>
+      )}
+
+      {imagenPendiente && (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            marginHorizontal: 14,
+            marginBottom: 6,
+            padding: 8,
+            backgroundColor: colores.tarjeta,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: colores.borde,
+          }}
+        >
+          <Image source={{ uri: imagenPendiente.uri }} style={{ width: 44, height: 44, borderRadius: 8 }} />
+          <Text style={{ color: colores.textoSuave, fontSize: 13, flex: 1 }}>
+            Foto lista para enviar
+          </Text>
+          <Pressable onPress={() => setImagenPendiente(null)} hitSlop={10}>
+            <Ionicons name="close-circle" size={22} color={colores.textoSuave} />
+          </Pressable>
+        </View>
+      )}
+
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "flex-end",
+          gap: 8,
+          paddingHorizontal: 12,
+          paddingTop: 8,
+          paddingBottom: 10,
+          borderTopWidth: 1,
+          borderTopColor: colores.borde,
+          backgroundColor: colores.tarjeta,
+        }}
+      >
+        <Pressable onPress={() => adjuntar(true)} disabled={pensando} hitSlop={8} style={{ padding: 6 }}>
+          <Ionicons name="camera" size={24} color={pensando ? colores.borde : colores.acento} />
+        </Pressable>
+        <Pressable onPress={() => adjuntar(false)} disabled={pensando} hitSlop={8} style={{ padding: 6 }}>
+          <Ionicons name="image" size={23} color={pensando ? colores.borde : colores.acento} />
+        </Pressable>
+        <TextInput
+          style={{
+            flex: 1,
+            color: colores.texto,
+            backgroundColor: colores.fondo,
+            borderWidth: 1,
+            borderColor: colores.borde,
+            borderRadius: 20,
+            paddingHorizontal: 14,
+            paddingVertical: 9,
+            maxHeight: 110,
+            fontSize: 15,
+          }}
+          placeholder="Escribí o mandá una foto…"
+          placeholderTextColor={colores.textoSuave}
+          value={entrada}
+          onChangeText={setEntrada}
+          multiline
+          editable={!pensando}
+        />
+        <Pressable
+          onPress={enviar}
+          disabled={pensando || (!entrada.trim() && !imagenPendiente)}
+          style={{
+            backgroundColor:
+              pensando || (!entrada.trim() && !imagenPendiente) ? colores.borde : colores.acento,
+            borderRadius: 20,
+            width: 40,
+            height: 40,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="arrow-up" size={20} color="#fff" />
+        </Pressable>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
