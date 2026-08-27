@@ -13,12 +13,14 @@ import HistorialScreen from "./screens/HistorialScreen";
 import LoginScreen from "./screens/LoginScreen";
 import NuevaPickScreen, { type BorradorPick } from "./screens/NuevaPickScreen";
 import ParlayScreen from "./screens/ParlayScreen";
+import RegistrarSalidaScreen from "./screens/RegistrarSalidaScreen";
 import RivalesScreen from "./screens/RivalesScreen";
 
 const PESTANAS = [
   { id: "dashboard", titulo: "Calibración", icono: "stats-chart" },
   { id: "nuevoPick", titulo: "Nuevo Pick", icono: "add-circle" },
   { id: "foto", titulo: "Foto", icono: "camera" },
+  { id: "salida", titulo: "Salida", icono: "baseball" },
   { id: "historial", titulo: "Historial", icono: "time" },
   { id: "rivales", titulo: "Rivales", icono: "people" },
   { id: "parlay", titulo: "Parlay", icono: "layers" },
@@ -71,6 +73,7 @@ export default function App() {
         {pestana === "dashboard" && <DashboardScreen />}
         {pestana === "nuevoPick" && <NuevaPickScreen borrador={borrador} />}
         {pestana === "foto" && <AnalizarFotoScreen onUsarDatos={usarDatosDeFoto} />}
+        {pestana === "salida" && <RegistrarSalidaScreen />}
         {pestana === "historial" && <HistorialScreen />}
         {pestana === "rivales" && <RivalesScreen />}
         {pestana === "parlay" && <ParlayScreen />}

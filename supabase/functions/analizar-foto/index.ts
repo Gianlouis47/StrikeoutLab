@@ -22,6 +22,11 @@ interface DatosExtraidos {
   pick: "OVER" | "UNDER" | null;
   cuota: number | null;
   codigo: string | null;
+  fecha: string | null;
+  k: number | null;
+  ip: number | null;
+  bb: number | null;
+  pitcheos: number | null;
   otros_datos: Record<string, unknown>;
 }
 
@@ -33,14 +38,16 @@ const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 // con el secret NVIDIA_MODEL_VISION.
 const MODELO_VISION = Deno.env.get("NVIDIA_MODEL_VISION") ?? "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
 
-const INSTRUCCIONES = `Analiza esta imagen. Puede ser: un ticket/boleta de la banca Star Sport, una captura de estadísticas (MLB.com, Baseball Savant, FanGraphs), o un boxscore de un juego.
+const INSTRUCCIONES = `Analiza esta imagen. Puede ser: un ticket/boleta de la banca Star Sport, una captura de estadísticas (MLB.com, Baseball Savant, FanGraphs), o un boxscore de un juego ya terminado.
 
 Extrae exactamente lo que puedas LEER en la imagen — nunca inventes un dato que no esté visible. Si un campo no aparece o no es legible, usa null.
 
 Responde SOLO con JSON válido, sin texto adicional, con esta forma exacta:
-{"tipo_detectado":"ticket_star_sport"|"captura_stats"|"boxscore"|"desconocido","pitcher":string|null,"equipo":string|null,"rival":string|null,"linea":number|null,"pick":"OVER"|"UNDER"|null,"cuota":number|null,"codigo":string|null,"otros_datos":{}}
+{"tipo_detectado":"ticket_star_sport"|"captura_stats"|"boxscore"|"desconocido","pitcher":string|null,"equipo":string|null,"rival":string|null,"linea":number|null,"pick":"OVER"|"UNDER"|null,"cuota":number|null,"codigo":string|null,"fecha":string|null,"k":number|null,"ip":number|null,"bb":number|null,"pitcheos":number|null,"otros_datos":{}}
 
-"otros_datos" es para cualquier estadística visible que no encaje en los campos anteriores (K%, Whiff%, ERA, innings, fecha, etc.) — inclúyela ahí como pares clave-valor.`;
+Si la imagen es un boxscore de un juego terminado (tipo_detectado="boxscore"), llená además: "fecha" (formato YYYY-MM-DD si se ve), "k" (ponches que sacó el pitcher esa salida), "ip" (innings pitcheados, ej. 6.2 para 6 y 2/3), "bb" (bases por bolas que dio), "pitcheos" (cantidad de lanzamientos totales, si aparece). Estos cuatro son sobre EL LANZADOR de la imagen, no del equipo completo.
+
+"otros_datos" es para cualquier estadística visible que no encaje en los campos anteriores (K%, Whiff%, ERA, etc.) — inclúyela ahí como pares clave-valor.`;
 
 async function llamarNvidiaVision(imagenBase64: string, mimeType: string): Promise<string> {
   const apiKey = Deno.env.get("NVIDIA_API_KEY");

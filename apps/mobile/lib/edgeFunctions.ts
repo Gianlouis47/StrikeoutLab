@@ -92,6 +92,11 @@ export interface DatosExtraidosFoto {
   pick: "OVER" | "UNDER" | null;
   cuota: number | null;
   codigo: string | null;
+  fecha: string | null;
+  k: number | null;
+  ip: number | null;
+  bb: number | null;
+  pitcheos: number | null;
   otros_datos: Record<string, unknown>;
 }
 

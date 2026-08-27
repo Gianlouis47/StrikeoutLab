@@ -22,6 +22,17 @@ export const resultadoPickSchema = z.object({
   resultadoK: z.number().int("Los ponches deben ser un número entero").nonnegative("No puede ser negativo"),
 });
 
+export const salidaNuevaSchema = z.object({
+  pitcher: z.string().min(1, "Falta el nombre del pitcher"),
+  fecha: z.string().min(1, "Falta la fecha"),
+  rival: z.string().min(1, "Falta el rival"),
+  ip: z.number().nonnegative("Los innings deben ser un número válido (ej. 6.2 para 6 y 2/3)"),
+  k: z.number().int("Los ponches deben ser un número entero").nonnegative("No puede ser negativo"),
+  bb: z.number().int("Las bases por bolas deben ser un número entero").nonnegative("No puede ser negativo"),
+  pitcheos: z.number().int("Los lanzamientos deben ser un número entero").nonnegative("No puede ser negativo").nullable(),
+});
+export type SalidaNueva = z.infer<typeof salidaNuevaSchema>;
+
 export const equipoTeamKSchema = z.object({
   equipo: z.string().min(1, "Falta el equipo"),
   ventana: z.enum(["TEMPORADA", "ULTIMOS_14"]),
