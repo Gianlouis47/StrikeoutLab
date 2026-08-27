@@ -220,6 +220,96 @@ export function Insignia({
   );
 }
 
+/**
+ * Número grande con su etiqueta. Para el dato que importa de una pantalla:
+ * se lee de un vistazo sin tener que buscarlo entre párrafos.
+ */
+export function Metrica({
+  valor,
+  etiqueta,
+  tono = "neutral",
+  ancho,
+}: {
+  valor: string;
+  etiqueta: string;
+  tono?: "neutral" | "exito" | "peligro" | "acento";
+  /** Por defecto ocupa el espacio disponible en su fila. */
+  ancho?: number;
+}) {
+  const color =
+    tono === "exito"
+      ? colores.exito
+      : tono === "peligro"
+        ? colores.peligro
+        : tono === "acento"
+          ? colores.acento
+          : colores.texto;
+  return (
+    <View style={[estilos.metrica, ancho ? { width: ancho } : { flex: 1 }]}>
+      <Text style={[estilos.metricaValor, { color }]} numberOfLines={1} adjustsFontSizeToFit>
+        {valor}
+      </Text>
+      <Text style={estilos.metricaEtiqueta}>{etiqueta}</Text>
+    </View>
+  );
+}
+
+/**
+ * Barra horizontal para comparar valores de un vistazo. Una lista de
+ * números en texto plano obliga a leerlos todos; con barra se ve enseguida
+ * quién está arriba y quién abajo.
+ */
+export function Barra({
+  proporcion,
+  tono = "acento",
+  alto = 6,
+}: {
+  /** 0 a 1. Se recorta si viene fuera de rango. */
+  proporcion: number;
+  tono?: "acento" | "exito" | "peligro" | "advertencia";
+  alto?: number;
+}) {
+  const color =
+    tono === "exito"
+      ? colores.exito
+      : tono === "peligro"
+        ? colores.peligro
+        : tono === "advertencia"
+          ? colores.advertencia
+          : colores.acento;
+  const ancho = `${Math.max(0, Math.min(1, proporcion)) * 100}%` as const;
+  return (
+    <View style={[estilos.barraFondo, { height: alto, borderRadius: alto / 2 }]}>
+      <View style={{ width: ancho, height: "100%", backgroundColor: color, borderRadius: alto / 2 }} />
+    </View>
+  );
+}
+
+/** Etiqueta a la izquierda, valor a la derecha. Para listas de datos. */
+export function FilaDato({
+  etiqueta,
+  valor,
+  tono = "neutral",
+}: {
+  etiqueta: string;
+  valor: string;
+  tono?: "neutral" | "exito" | "peligro";
+}) {
+  const color =
+    tono === "exito" ? colores.exito : tono === "peligro" ? colores.peligro : colores.texto;
+  return (
+    <View style={estilos.filaEntreEspacio}>
+      <Text style={estilos.filaDatoEtiqueta}>{etiqueta}</Text>
+      <Text style={[estilos.filaDatoValor, { color }]}>{valor}</Text>
+    </View>
+  );
+}
+
+/** Separador con título, para agrupar secciones dentro de una lista larga. */
+export function Seccion({ titulo }: { titulo: string }) {
+  return <Text style={estilos.seccion}>{titulo}</Text>;
+}
+
 export const estilos = StyleSheet.create({
   pantalla: {
     flex: 1,
@@ -349,5 +439,46 @@ export const estilos = StyleSheet.create({
     color: colores.textoSuave,
     textAlign: "center",
     marginTop: 6,
+  },
+  metrica: {
+    backgroundColor: colores.tarjeta,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    gap: 2,
+  },
+  metricaValor: {
+    fontSize: 24,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  metricaEtiqueta: {
+    color: colores.textoSuave,
+    fontSize: 11,
+    textAlign: "center",
+  },
+  barraFondo: {
+    width: "100%",
+    backgroundColor: colores.borde,
+    overflow: "hidden",
+  },
+  filaDatoEtiqueta: {
+    color: colores.textoSuave,
+    fontSize: 13,
+  },
+  filaDatoValor: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  seccion: {
+    color: colores.textoSuave,
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginTop: 4,
   },
 });
