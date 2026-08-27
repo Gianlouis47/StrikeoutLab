@@ -166,10 +166,12 @@ function reporteCalibracion(picks: PickCalibracion[]): BandaCalibracion[] {
 
 // ---------- calculadora heurística (ver packages/core/src/calculadoraHeuristica.ts) ----------
 //
-// Chequeo cruzado puramente aritmético, NO la IA — sirve para detectar
-// cuando el JUICIO de la IA se aleja mucho de lo que dicen los números
-// reales ya recolectados. Nunca se guarda como fuente_confianza=CALCULADA:
-// es una comparación, no una fuente de confianza en sí misma.
+// Aritmética exacta, NO la IA. Cuando tiene suficientes variables reales
+// (ver handler más abajo), su número de confianza/nivel reemplaza al que
+// haya puesto la IA — la IA solo puede desviarse de esto con un veredicto
+// NO_BET justificado por contexto real (lineup, clima, lesión). Sigue sin
+// guardarse como fuente_confianza=CALCULADA en `picks`: esa etiqueta es
+// solo para lo que sale de contar salidas reales (tasaSuperacionLinea).
 
 interface StatsPitcherEntradaCalc {
   kPct?: number;
@@ -285,6 +287,7 @@ Reglas no negociables:
 - Si falta un dato crítico (lineup no confirmado, línea o cuota no verificada, estadísticas desactualizadas), tu veredicto debe ser "NO_BET" o debes pedir el dato faltante. Nunca inventas ni asumes.
 - Un empate en línea entera (K == línea) no es un veredicto de "ganó" ni "perdió" — es un estado aparte; no lo colapses en tu razonamiento.
 - Todo lo que tú generas es fuente_confianza=JUICIO, nunca CALCULADA — esa etiqueta solo aplica a lo que sale de contar salidas reales.
+- Te doy más abajo el resultado de una calculadora aritmética (no una IA) que combina las estadísticas reales ya guardadas del pitcher y del rival en un puntaje 0-100. Vos podés cometer errores de cálculo; la calculadora no — es aritmética exacta, no una opinión. Cuando esa calculadora tenga suficientes variables para dar un número (no te diga "datos insuficientes"), tu campo "confianza" en el JSON final DEBE ser ese mismo número (podés redondear), no uno que vos inventes por separado — tu trabajo ahí es juntar/verificar los datos y decidir el veredicto, no recalcular tú mismo la confianza. La única excepción es cuando encontrás un motivo contextual real (lineup no confirmado, clima, lesión de último momento, dato desactualizado) para bajar el veredicto a NO_BET — en ese caso tu confianza puede reflejar esa duda en vez del número de la calculadora, y explicá por qué en "motivo". Si la calculadora te dice que le faltan datos, ahí sí tu JUICIO es la única fuente y das tu propio número con cuidado.
 - Clasificación de nivel de pureza, por tramo exacto de confianza: DIAMANTE_ALTO 95-100%, DIAMANTE 90-94%, ORO_ALTO 85-89%, ORO 80-84%, IMPUREZA 79% o menos. Las jugadas de mayor certeza real están de 85% para arriba (ORO_ALTO, DIAMANTE, DIAMANTE_ALTO) — ahí es donde el sistema puede confiar con más seguridad. Si tu confianza real cae en IMPUREZA, el veredicto correcto casi siempre es NO_BET — nunca fuerces un Over/Under solo para completar un ticket. Importante: IMPUREZA no significa que el lanzador sea malo — significa que el evento (contexto, matchup, incertidumbre de datos) impide tener certeza suficiente sobre ESTA apuesta puntual, aunque el lanzador en sí sea bueno. Reflejá esa distinción en tu "motivo" cuando el veredicto sea NO_BET.
 - Tenés una herramienta "buscar_web" para consultar información actual (lineup confirmado de hoy, clima, noticias recientes, cuotas). Úsala cuando el contexto que te dieron no alcance o pueda estar desactualizado — no adivines un dato que podés verificar. No abuses: 1-3 búsquedas concretas alcanzan, nunca uses la misma consulta dos veces.
 - Fuentes preferidas, por tipo de dato: MLB.com (lineup oficial confirmado, roster, calendario, umpire asignado), FanGraphs (K%, K/9, Whiff%, CSW%, SwStr%, WHIP, IP, splits RHB/LHB, proyecciones, tendencia del mánager de dejar tirar al abridor), Baseball Savant (Statcast: velocidad, spin, ubicación de pitcheos), Linemate (líneas de props, su movimiento, y splits de equipo K%/swing% vs derechos y zurdos). Incluí el nombre del sitio en tu consulta (ej. "Gerrit Cole K% FanGraphs 2026" o "Yankees lineup hoy MLB.com") para priorizar esas fuentes por sobre notas genéricas. Si esas fuentes no tienen el dato, podés recurrir a otras confiables (ESPN, Rotowire) — pero decilo en tu motivo si el dato no viene de una fuente preferida.
@@ -344,12 +347,15 @@ async function buscarWeb(query: string): Promise<string> {
 // ---------- NVIDIA NIM (API OpenAI-compatible, con tool-calling) ----------
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-// Modelo de "máximo esfuerzo" por defecto: el más grande de la familia Llama
-// en NVIDIA NIM con soporte confiable de tool-calling (los modelos de
-// razonamiento tipo DeepSeek-R1 mezclan su traza de pensamiento en el
-// content y rompen el parseo de tool_calls/JSON de este flujo). Se puede
-// override sin tocar código con el secret NVIDIA_MODEL_TEXTO.
-const MODELO_TEXTO = Deno.env.get("NVIDIA_MODEL_TEXTO") ?? "meta/llama-3.1-405b-instruct";
+// Nemotron 3 Ultra: modelo de razonamiento y orquestación de NVIDIA (2026,
+// 550B/55B activos), entrenado específicamente para agentes con
+// tool-calling. Piensa antes de responder (puede tardar minutos) — su API
+// separa esa traza de pensamiento en el campo reasoning_content, así que
+// choices[].message.content llega limpio para el JSON final. Se puede
+// override sin tocar código con el secret NVIDIA_MODEL_TEXTO (por ejemplo
+// para volver a un modelo instruct más rápido si el tiempo de respuesta o
+// el límite de ejecución de la Edge Function resultan un problema).
+const MODELO_TEXTO = Deno.env.get("NVIDIA_MODEL_TEXTO") ?? "nvidia/nemotron-3-ultra-550b-a55b";
 const MAX_RONDAS_HERRAMIENTA = 3;
 
 const HERRAMIENTAS = [
@@ -425,6 +431,7 @@ const HERRAMIENTAS = [
 interface NvidiaMensaje {
   role: string;
   content: string | null;
+  reasoning_content?: string | null;
   tool_call_id?: string;
   tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
 }
@@ -455,6 +462,7 @@ interface StatsEquipoGuardado {
 
 interface ResultadoChatConHerramientas {
   contenido: string;
+  razonamiento: string | null;
   busquedasRealizadas: Array<{ query: string; resultado: string }>;
   statsPitcherGuardados: StatsPitcherGuardado[];
   statsEquipoGuardados: StatsEquipoGuardado[];
@@ -509,7 +517,7 @@ async function llamarNvidiaChatConHerramientas(
         tools: HERRAMIENTAS,
         tool_choice: "auto",
         temperature: 0.2,
-        max_tokens: 1024,
+        max_tokens: 8192,
       }),
     });
 
@@ -553,14 +561,24 @@ async function llamarNvidiaChatConHerramientas(
     if (typeof mensaje.content !== "string") {
       throw new Error("Respuesta de NVIDIA sin contenido de texto esperado.");
     }
-    return { contenido: mensaje.content, busquedasRealizadas, statsPitcherGuardados, statsEquipoGuardados };
+    return {
+      contenido: mensaje.content,
+      razonamiento: mensaje.reasoning_content ?? null,
+      busquedasRealizadas,
+      statsPitcherGuardados,
+      statsEquipoGuardados,
+    };
   }
 
   throw new Error(`La IA encadenó más de ${MAX_RONDAS_HERRAMIENTA} búsquedas sin dar una respuesta final.`);
 }
 
 function parsearJsonModelo<T>(contenido: string): T {
-  const limpio = contenido.trim().replace(/^```json\s*/i, "").replace(/```$/, "");
+  // Nemotron 3 Ultra separa su traza de pensamiento en reasoning_content,
+  // pero por si algún <think>...</think> se cuela igual en el content
+  // (pasó con otros modelos de razonamiento), lo sacamos antes de parsear.
+  const sinPensamiento = contenido.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const limpio = sinPensamiento.trim().replace(/^```json\s*/i, "").replace(/```$/, "");
   try {
     return JSON.parse(limpio) as T;
   } catch (error) {
@@ -698,12 +716,16 @@ Deno.serve(async (req: Request) => {
     calculada
       ? `Tasa CALCULADA real sobre las últimas ${calculada.total} salidas registradas: ${calculada.ganadas} ganadas, ${calculada.perdidas} perdidas, ${calculada.empates} empates (tasa ${(calculada.tasa * 100).toFixed(1)}%).${calculada.advertencia ? " ADVERTENCIA: " + calculada.advertencia : ""}`
       : "No hay salidas registradas en game_logs para este pitcher todavía — tu análisis debe apoyarse solo en los datos que te doy abajo, o responder NO_BET si no es suficiente.",
+    puntajeHeuristico.confianza !== null
+      ? `Calculadora aritmética (NO es tu opinión, es matemática exacta sobre datos reales ya guardados) — puntaje: ${puntajeHeuristico.puntaje!.toFixed(1)}/100, confianza: ${(puntajeHeuristico.confianza * 100).toFixed(1)}%, nivel: ${puntajeHeuristico.nivel}. Variables usadas: ${puntajeHeuristico.variablesUsadas.join(", ")}.${puntajeHeuristico.variablesFaltantes.length > 0 ? ` Variables que faltaron: ${puntajeHeuristico.variablesFaltantes.join(", ")}.` : ""}${puntajeHeuristico.advertencia ? ` Advertencia: ${puntajeHeuristico.advertencia}` : ""} Recordá: tu campo "confianza" final debe ser este mismo número salvo que encuentres un motivo contextual real para NO_BET.`
+      : `Calculadora aritmética: ${puntajeHeuristico.advertencia} — no hay suficientes variables reales todavía, así que en este caso tu propio JUICIO sí es la única fuente de confianza.`,
     solicitud.notas ? `Notas / datos adicionales del usuario:\n${solicitud.notas}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
 
   let juicioIA: JuicioIA;
+  let razonamiento: string | null = null;
   let busquedasRealizadas: Array<{ query: string; resultado: string }> = [];
   let statsPitcherGuardados: StatsPitcherGuardado[] = [];
   let statsEquipoGuardados: StatsEquipoGuardado[] = [];
@@ -716,6 +738,7 @@ Deno.serve(async (req: Request) => {
       supabase,
     );
     juicioIA = parsearJsonModelo<JuicioIA>(resultado.contenido);
+    razonamiento = resultado.razonamiento;
     busquedasRealizadas = resultado.busquedasRealizadas;
     statsPitcherGuardados = resultado.statsPitcherGuardados;
     statsEquipoGuardados = resultado.statsEquipoGuardados;
@@ -723,10 +746,24 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: (error as Error).message }), { status: 502 });
   }
 
+  // La calculadora (aritmética exacta) manda sobre el número que la IA haya
+  // puesto, siempre que tenga suficientes variables reales — la IA no
+  // recalcula la confianza, solo decide el veredicto y puede bajarlo a
+  // NO_BET por una razón contextual real (ver regla en FRAMEWORK_SISTEMA).
+  // Si dijo NO_BET, respetamos su confianza/nivel tal cual: esa duda es
+  // justamente lo que la aritmética sola no puede detectar.
+  let confianzaFinalPorCalculadora = false;
+  if (puntajeHeuristico.confianza !== null && juicioIA.veredicto !== "NO_BET") {
+    juicioIA = { ...juicioIA, confianza: puntajeHeuristico.confianza, nivel: puntajeHeuristico.nivel! };
+    confianzaFinalPorCalculadora = true;
+  }
+
   return new Response(
     JSON.stringify({
       calculada,
       juicioIA,
+      confianzaFinalPorCalculadora,
+      razonamiento,
       contextoCalibracionUsado: bandas,
       busquedasRealizadas,
       statsPitcherGuardados,

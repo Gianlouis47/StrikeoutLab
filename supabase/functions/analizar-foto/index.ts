@@ -26,7 +26,12 @@ interface DatosExtraidos {
 }
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const MODELO_VISION = Deno.env.get("NVIDIA_MODEL_VISION") ?? "meta/llama-3.2-90b-vision-instruct";
+// Nemotron 3 Nano Omni: modelo multimodal de NVIDIA (2026), pensado como
+// "sub-agente de percepción" — lee imagen/texto y transcribe. Es un modelo
+// con razonamiento interno propio, pero su API separa ese pensamiento del
+// content final (no hace falta limpiarlo acá). Override sin tocar código
+// con el secret NVIDIA_MODEL_VISION.
+const MODELO_VISION = Deno.env.get("NVIDIA_MODEL_VISION") ?? "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
 
 const INSTRUCCIONES = `Analiza esta imagen. Puede ser: un ticket/boleta de la banca Star Sport, una captura de estadísticas (MLB.com, Baseball Savant, FanGraphs), o un boxscore de un juego.
 
@@ -51,8 +56,7 @@ async function llamarNvidiaVision(imagenBase64: string, mimeType: string): Promi
     body: JSON.stringify({
       model: MODELO_VISION,
       temperature: 0.1,
-      max_tokens: 1024,
-      response_format: { type: "json_object" },
+      max_tokens: 2048,
       messages: [
         {
           role: "user",

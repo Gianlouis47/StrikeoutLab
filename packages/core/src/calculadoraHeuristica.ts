@@ -1,16 +1,20 @@
 /**
- * Calculadora heurística de segunda opinión.
+ * Calculadora heurística.
  *
- * Esta NO es la IA, y no reemplaza su JUICIO — es un chequeo cruzado
- * puramente aritmético para detectar cuando la IA pudo haberse
- * equivocado: si su confianza declarada y el puntaje de acá difieren
- * mucho, es una señal de alerta para revisar antes de guardar el pick.
+ * Esta NO es la IA — es aritmética exacta sobre las estadísticas reales ya
+ * guardadas del pitcher y del rival. Cuando tiene suficientes variables
+ * (3 o más), su número (`confianza`/`nivel`) es la fuente de verdad para el
+ * análisis: la IA (ver supabase/functions/analizar-pitcher) usa este mismo
+ * número en vez de inventar el suyo, salvo que tenga un motivo contextual
+ * real (lineup no confirmado, clima, lesión) para bajar el veredicto a
+ * NO_BET.
  *
  * Los pesos y anclas de esta fórmula son un punto de partida razonable,
  * no una verdad validada — a diferencia de `tasaSuperacionLinea()`, que sí
- * cuenta resultados reales. Por eso esto nunca se guarda como
- * fuente_confianza=CALCULADA en `picks`: es una herramienta de comparación,
- * no una fuente de confianza en sí misma (ver docs/framework/
+ * cuenta resultados reales de historial. Por eso esto nunca se guarda como
+ * fuente_confianza=CALCULADA en `picks` (esa etiqueta es solo para lo que
+ * sale de contar salidas reales) — sigue siendo fuente_confianza=JUICIO,
+ * aunque el número en sí no lo haya inventado la IA (ver docs/framework/
  * 00_marco_transversal.md y 15_mlb_refiner_15_layer_filter.md).
  */
 
