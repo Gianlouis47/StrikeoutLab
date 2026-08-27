@@ -1,19 +1,35 @@
+import { Ionicons } from "@expo/vector-icons";
 import React, { useState } from "react";
-import { ScrollView, Text, View } from "react-native";
-import { Boton, Campo, Mensaje, SelectorPick, Subtitulo, Tarjeta, Titulo, colores, estilos } from "../components/ui";
-import { analizarPitcher, type AnalizarPitcherRespuesta, type DatosExtraidosFoto } from "../lib/edgeFunctions";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Barra,
+  Boton,
+  Campo,
+  Insignia,
+  Mensaje,
+  Seccion,
+  Subtitulo,
+  Tarjeta,
+  Titulo,
+  colores,
+  estilos,
+} from "../components/ui";
+import { proyectarPonches, type Proyeccion } from "../lib/calculadora";
+import type { DatosExtraidosFoto } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
-import { aprendizajeNuevoSchema, pickNuevoSchema } from "../lib/validators";
+import { pickNuevoSchema } from "../lib/validators";
 
 const NIVELES = ["DIAMANTE_ALTO", "DIAMANTE", "ORO_ALTO", "ORO", "IMPUREZA"] as const;
-const ETIQUETA_NIVEL: Record<(typeof NIVELES)[number], string> = {
+type Nivel = (typeof NIVELES)[number];
+
+const ETIQUETA_NIVEL: Record<Nivel, string> = {
   DIAMANTE_ALTO: "Diamante Alto",
   DIAMANTE: "Diamante",
   ORO_ALTO: "Oro Alto",
   ORO: "Oro",
   IMPUREZA: "Impureza",
 };
-const RANGO_NIVEL: Record<(typeof NIVELES)[number], string> = {
+const RANGO_NIVEL: Record<Nivel, string> = {
   DIAMANTE_ALTO: "95-100%",
   DIAMANTE: "90-94%",
   ORO_ALTO: "85-89%",
@@ -26,6 +42,40 @@ export interface BorradorPick {
   version: number;
 }
 
+/** Chip seleccionable. Los botones grandes para elegir una opción entre dos
+ *  hacían que todo pesara igual que la acción principal. */
+function Opcion({
+  texto,
+  activo,
+  onPress,
+  tono = "acento",
+}: {
+  texto: string;
+  activo: boolean;
+  onPress: () => void;
+  tono?: "acento" | "exito" | "advertencia";
+}) {
+  const color = tono === "exito" ? colores.exito : tono === "advertencia" ? colores.advertencia : colores.acento;
+  return (
+    <Pressable
+      onPress={onPress}
+      style={{
+        flex: 1,
+        paddingVertical: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        alignItems: "center",
+        backgroundColor: activo ? color + "26" : colores.tarjeta,
+        borderColor: activo ? color : colores.borde,
+      }}
+    >
+      <Text style={{ color: activo ? color : colores.textoSuave, fontWeight: activo ? "700" : "500", fontSize: 14 }}>
+        {texto}
+      </Text>
+    </Pressable>
+  );
+}
+
 export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick | null }) {
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [codigo, setCodigo] = useState("");
@@ -36,8 +86,14 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   const [pick, setPick] = useState<"OVER" | "UNDER">("OVER");
   const [manoPitcher, setManoPitcher] = useState<"RHP" | "LHP">("RHP");
   const [confianza, setConfianza] = useState("");
-  const [nivel, setNivel] = useState<(typeof NIVELES)[number]>("ORO");
-  const [notas, setNotas] = useState("");
+  const [nivel, setNivel] = useState<Nivel>("ORO");
+
+  const [opcionesAbiertas, setOpcionesAbiertas] = useState(false);
+  const [calculando, setCalculando] = useState(false);
+  const [proyeccion, setProyeccion] = useState<Proyeccion | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
 
   const versionAplicada = React.useRef<number | null>(null);
   React.useEffect(() => {
@@ -50,68 +106,60 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
     if (d.linea !== null) setLinea(String(d.linea));
     if (d.pick) setPick(d.pick);
     if (d.codigo) setCodigo(d.codigo);
-    if (Object.keys(d.otros_datos ?? {}).length > 0) {
-      setNotas(
-        Object.entries(d.otros_datos)
-          .map(([clave, valor]) => `${clave}: ${valor}`)
-          .join("\n"),
-      );
-    }
   }, [borrador]);
 
-  const [analizando, setAnalizando] = useState(false);
-  const [respuestaIA, setRespuestaIA] = useState<AnalizarPitcherRespuesta | null>(null);
-  const [guardando, setGuardando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
-  const [guardandoAprendizaje, setGuardandoAprendizaje] = useState(false);
-  const [aprendizajeGuardado, setAprendizajeGuardado] = useState(false);
-
-  async function pedirOpinionIA() {
+  async function calcular() {
     setError(null);
     setOk(null);
-    setAprendizajeGuardado(false);
-    if (!pitcher || !linea || !pick) {
-      setError("Completa al menos pitcher, línea y pick antes de pedir la opinión de la IA.");
+    if (!pitcher.trim() || !linea) {
+      setError("Necesito al menos el lanzador y la línea.");
       return;
     }
-    setAnalizando(true);
+    setCalculando(true);
     try {
-      const respuesta = await analizarPitcher({
-        pitcher,
-        equipo,
-        rival,
+      const r = await proyectarPonches({
+        pitcher: pitcher.trim(),
         linea: parseFloat(linea),
-        pick,
-        notas: notas || undefined,
+        rival: rival.trim() || undefined,
         manoPitcher,
       });
-      setRespuestaIA(respuesta);
-      setConfianza((respuesta.juicioIA.confianza * 100).toFixed(0));
-      setNivel(respuesta.juicioIA.nivel);
+      if (!r.encontrado) {
+        setProyeccion(null);
+        setError(r.mensaje);
+        return;
+      }
+      setProyeccion(r);
+      // La calculadora manda: se prellenan confianza, nivel y hasta el lado.
+      setConfianza((r.confianza * 100).toFixed(0));
+      setNivel(r.nivel);
+      if (r.veredicto) setPick(r.veredicto);
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setAnalizando(false);
+      setCalculando(false);
     }
   }
 
-  async function guardarPick(fuenteConfianza: "CALCULADA" | "JUICIO") {
+  async function guardar() {
     setError(null);
     setOk(null);
 
     const validacion = pickNuevoSchema.safeParse({
       fecha,
       codigo: codigo || null,
-      pitcher,
+      pitcher: proyeccion?.pitcher ?? pitcher,
       equipo,
       rival,
       linea: parseFloat(linea),
       pick,
       confianza: parseFloat(confianza) / 100,
       nivel,
-      fuenteConfianza,
-      motivo: respuestaIA?.juicioIA.motivo ?? null,
+      // Sale de estadísticas de temporada, no de contar salidas reales:
+      // por definición del esquema eso es JUICIO, no CALCULADA.
+      fuenteConfianza: "JUICIO",
+      motivo: proyeccion
+        ? `Proyección: ${proyeccion.k_proyectados} K esperados vs línea ${proyeccion.linea}. ${proyeccion.entradas_usadas.join(", ")}.`
+        : null,
     });
     if (!validacion.success) {
       setError(validacion.error.issues[0]?.message ?? "Datos inválidos.");
@@ -120,28 +168,27 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
 
     setGuardando(true);
     try {
-      const datos = validacion.data;
+      const d = validacion.data;
       await repositorio.crear("picks", {
-        fecha: datos.fecha,
-        codigo: datos.codigo,
-        pitcher: datos.pitcher,
-        equipo: datos.equipo,
-        rival: datos.rival,
-        linea: datos.linea,
-        pick: datos.pick,
-        confianza: datos.confianza,
-        nivel: datos.nivel,
-        fuente_confianza: datos.fuenteConfianza,
-        motivo: datos.motivo,
+        fecha: d.fecha,
+        codigo: d.codigo,
+        pitcher: d.pitcher,
+        equipo: d.equipo,
+        rival: d.rival,
+        linea: d.linea,
+        pick: d.pick,
+        confianza: d.confianza,
+        nivel: d.nivel,
+        fuente_confianza: d.fuenteConfianza,
+        motivo: d.motivo,
       });
-      setOk("Pick guardado.");
+      setOk(`Pick de ${d.pitcher} guardado.`);
       setPitcher("");
       setEquipo("");
       setRival("");
       setCodigo("");
       setConfianza("");
-      setNotas("");
-      setRespuestaIA(null);
+      setProyeccion(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -149,243 +196,237 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
     }
   }
 
-  async function guardarAprendizaje() {
-    const propuesta = respuestaIA?.juicioIA.propuesta_aprendizaje;
-    if (!propuesta) return;
-
-    const validacion = aprendizajeNuevoSchema.safeParse({
-      descubrimiento: propuesta.descubrimiento,
-      fuente: propuesta.fuente ?? null,
-      reglaNueva: propuesta.regla_nueva,
-      porQueImporta: propuesta.por_que_importa,
-    });
-    if (!validacion.success) {
-      setError(validacion.error.issues[0]?.message ?? "Propuesta de aprendizaje inválida.");
-      return;
-    }
-
-    setGuardandoAprendizaje(true);
-    setError(null);
-    try {
-      const datos = validacion.data;
-      await repositorio.crear("learning_log", {
-        descubrimiento: datos.descubrimiento,
-        fuente: datos.fuente,
-        regla_nueva: datos.reglaNueva,
-        por_que_importa: datos.porQueImporta,
-      });
-      setAprendizajeGuardado(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setGuardandoAprendizaje(false);
-    }
-  }
+  const coincide = proyeccion?.veredicto === pick;
 
   return (
-    <ScrollView style={estilos.pantalla} contentContainerStyle={estilos.contenido}>
-      <Titulo>Nuevo pick</Titulo>
-      <Subtitulo>Registra el pick. La IA solo opina (JUICIO) — tú decides si lo guardas.</Subtitulo>
-
-      <Campo etiqueta="Fecha (YYYY-MM-DD)" value={fecha} onChangeText={setFecha} />
-      <Campo etiqueta="Código de la banca" value={codigo} onChangeText={setCodigo} />
-      <Campo etiqueta="Pitcher" value={pitcher} onChangeText={setPitcher} placeholder="Ej. Gerrit Cole" />
-      <Campo etiqueta="Equipo" value={equipo} onChangeText={setEquipo} autoCapitalize="characters" placeholder="NYY" />
-      <Campo etiqueta="Rival" value={rival} onChangeText={setRival} autoCapitalize="characters" placeholder="BOS" />
-      <Campo etiqueta="Línea de ponches" value={linea} onChangeText={setLinea} keyboardType="decimal-pad" />
-
+    <ScrollView style={estilos.pantalla} contentContainerStyle={estilos.contenido} keyboardShouldPersistTaps="handled">
       <View>
-        <Text style={estilos.etiqueta}>PICK</Text>
-        <SelectorPick valor={pick} onCambiar={setPick} />
+        <Titulo>Pick manual</Titulo>
+        <Subtitulo>Para cuando querés cargarlo a mano. Lo normal es mandar la foto en Análisis.</Subtitulo>
       </View>
 
-      <View>
-        <Text style={estilos.etiqueta}>MANO DEL PITCHER (para buscar el split del rival)</Text>
-        <View style={estilos.filaSelector}>
-          {(["RHP", "LHP"] as const).map((m) => (
-            <Boton
-              key={m}
-              titulo={m === "RHP" ? "Derecho" : "Zurdo"}
-              variante={manoPitcher === m ? "primario" : "secundario"}
-              onPress={() => setManoPitcher(m)}
+      <Seccion titulo="El partido" />
+      <Tarjeta>
+        <Campo
+          etiqueta="Lanzador"
+          value={pitcher}
+          onChangeText={setPitcher}
+          placeholder="deGrom, T Rogers, Skenes…"
+          autoCapitalize="words"
+        />
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Campo
+              etiqueta="Su equipo"
+              value={equipo}
+              onChangeText={setEquipo}
+              autoCapitalize="characters"
+              placeholder="TEX"
             />
-          ))}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Campo
+              etiqueta="Rival"
+              value={rival}
+              onChangeText={setRival}
+              autoCapitalize="characters"
+              placeholder="CIN"
+            />
+          </View>
         </View>
-      </View>
+        <View style={{ gap: 6 }}>
+          <Text style={estilos.etiqueta}>Mano del lanzador</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Opcion texto="Derecho" activo={manoPitcher === "RHP"} onPress={() => setManoPitcher("RHP")} />
+            <Opcion texto="Zurdo" activo={manoPitcher === "LHP"} onPress={() => setManoPitcher("LHP")} />
+          </View>
+        </View>
+      </Tarjeta>
 
-      <Campo
-        etiqueta="Notas / datos adicionales (opcional)"
-        value={notas}
-        onChangeText={setNotas}
-        multiline
-        numberOfLines={3}
-        placeholder="K%, Whiff%, lineup confirmado, umpire, clima..."
+      <Seccion titulo="La apuesta" />
+      <Tarjeta>
+        <Campo
+          etiqueta="Línea de ponches"
+          value={linea}
+          onChangeText={setLinea}
+          keyboardType="decimal-pad"
+          placeholder="6.5"
+        />
+        <View style={{ gap: 6 }}>
+          <Text style={estilos.etiqueta}>Lado</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Opcion texto="OVER" activo={pick === "OVER"} onPress={() => setPick("OVER")} tono="exito" />
+            <Opcion texto="UNDER" activo={pick === "UNDER"} onPress={() => setPick("UNDER")} tono="advertencia" />
+          </View>
+        </View>
+      </Tarjeta>
+
+      <Boton
+        titulo={proyeccion ? "Recalcular" : "Calcular proyección"}
+        onPress={calcular}
+        cargando={calculando}
+        variante={proyeccion ? "secundario" : "primario"}
       />
 
-      <Boton titulo="Pedir opinión de la IA (JUICIO)" onPress={pedirOpinionIA} cargando={analizando} variante="secundario" />
+      {error && <Mensaje tipo="error" texto={error} />}
 
-      {respuestaIA && (
-        <Tarjeta>
-          <Text style={{ color: colores.texto, fontWeight: "700" }}>
-            Veredicto IA: {respuestaIA.juicioIA.veredicto} — {respuestaIA.juicioIA.nivel} (
-            {(respuestaIA.juicioIA.confianza * 100).toFixed(0)}%)
-          </Text>
-          <Text style={{ color: colores.textoSuave }}>{respuestaIA.juicioIA.motivo}</Text>
-          {respuestaIA.calculada && (
-            <Text style={{ color: colores.textoSuave }}>
-              Tasa CALCULADA real sobre su historial: {(respuestaIA.calculada.tasa * 100).toFixed(1)}% (
-              {respuestaIA.calculada.ganadas}/{respuestaIA.calculada.total})
-              {respuestaIA.calculada.advertencia ? ` — ${respuestaIA.calculada.advertencia}` : ""}
+      {proyeccion && (
+        <Tarjeta elevada>
+          {/* El número que responde la pregunta, arriba y grande. */}
+          <View style={{ alignItems: "center", gap: 2, paddingVertical: 6 }}>
+            <Text style={{ color: colores.texto, fontSize: 40, fontWeight: "800", letterSpacing: -1 }}>
+              {proyeccion.k_proyectados}
             </Text>
-          )}
+            <Text style={{ color: colores.textoSuave, fontSize: 13 }}>ponches proyectados</Text>
+          </View>
 
-          <View style={{ gap: 4, borderTopWidth: 1, borderTopColor: colores.borde, paddingTop: 8 }}>
-            <Text style={{ color: colores.textoSuave, fontWeight: "700", fontSize: 12 }}>
-              CALCULADORA (chequeo cruzado, no es la IA)
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              paddingVertical: 10,
+              backgroundColor: colores.fondo,
+              borderRadius: 12,
+            }}
+          >
+            <Text
+              style={{
+                color: proyeccion.veredicto === "OVER" ? colores.exito : colores.advertencia,
+                fontSize: 20,
+                fontWeight: "800",
+              }}
+            >
+              {proyeccion.veredicto ?? "SIN VENTAJA"}
             </Text>
-            {respuestaIA.puntajeHeuristico.confianza !== null ? (
-              <>
-                <Text style={{ color: colores.texto }}>
-                  {respuestaIA.puntajeHeuristico.nivel} ({(respuestaIA.puntajeHeuristico.confianza * 100).toFixed(0)}%)
-                  {" — "}
-                  usó: {respuestaIA.puntajeHeuristico.variablesUsadas.join(", ")}
+            <Text style={{ color: colores.textoSuave, fontSize: 15 }}>
+              {(proyeccion.confianza * 100).toFixed(0)}%
+            </Text>
+            <Insignia texto={ETIQUETA_NIVEL[proyeccion.nivel]} tono="acento" />
+          </View>
+
+          {/* Las tres probabilidades: el empate importa en línea entera. */}
+          <View style={{ gap: 6, marginTop: 4 }}>
+            <View style={{ gap: 3 }}>
+              <View style={estilos.filaEntreEspacio}>
+                <Text style={{ color: colores.textoSuave, fontSize: 12 }}>Over</Text>
+                <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+                  {(proyeccion.prob_over * 100).toFixed(0)}%
                 </Text>
-                {Math.abs(respuestaIA.puntajeHeuristico.confianza - respuestaIA.juicioIA.confianza) > 0.15 && (
-                  <Mensaje
-                    tipo="error"
-                    texto="⚠️ La calculadora y la IA no coinciden mucho — revisá bien antes de guardar."
-                  />
-                )}
-              </>
-            ) : (
-              <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
-                {respuestaIA.puntajeHeuristico.advertencia}
-              </Text>
+              </View>
+              <Barra proporcion={proyeccion.prob_over} tono="exito" alto={5} />
+            </View>
+            <View style={{ gap: 3 }}>
+              <View style={estilos.filaEntreEspacio}>
+                <Text style={{ color: colores.textoSuave, fontSize: 12 }}>Under</Text>
+                <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+                  {(proyeccion.prob_under * 100).toFixed(0)}%
+                </Text>
+              </View>
+              <Barra proporcion={proyeccion.prob_under} tono="advertencia" alto={5} />
+            </View>
+            {proyeccion.prob_empate > 0 && (
+              <View style={{ gap: 3 }}>
+                <View style={estilos.filaEntreEspacio}>
+                  <Text style={{ color: colores.textoSuave, fontSize: 12 }}>Empate (devuelven)</Text>
+                  <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+                    {(proyeccion.prob_empate * 100).toFixed(0)}%
+                  </Text>
+                </View>
+                <Barra proporcion={proyeccion.prob_empate} tono="acento" alto={5} />
+              </View>
             )}
           </View>
 
-          {respuestaIA.busquedasRealizadas.length > 0 && (
-            <View style={{ gap: 4 }}>
-              <Text style={{ color: colores.textoSuave, fontWeight: "700", fontSize: 12 }}>
-                BÚSQUEDAS QUE HIZO LA IA
-              </Text>
-              {respuestaIA.busquedasRealizadas.map((b, i) => (
-                <Text key={i} style={{ color: colores.textoSuave, fontSize: 12 }}>
-                  • {b.query}
-                </Text>
-              ))}
-            </View>
-          )}
+          <View style={{ height: 1, backgroundColor: colores.borde, marginVertical: 6 }} />
 
-          {(respuestaIA.statsPitcherGuardados.length > 0 || respuestaIA.statsEquipoGuardados.length > 0) && (
-            <View style={{ gap: 4 }}>
-              <Text style={{ color: colores.textoSuave, fontWeight: "700", fontSize: 12 }}>
-                DATOS RECOLECTADOS (guardados para la próxima)
-              </Text>
-              {respuestaIA.statsPitcherGuardados.map((s, i) => (
-                <Text key={`p${i}`} style={{ color: colores.textoSuave, fontSize: 12 }}>
-                  • {s.pitcher}:{" "}
-                  {[
-                    s.k_pct !== undefined && `K% ${s.k_pct}`,
-                    s.whiff_pct !== undefined && `Whiff% ${s.whiff_pct}`,
-                    s.csw_pct !== undefined && `CSW% ${s.csw_pct}`,
-                    s.swstr_pct !== undefined && `SwStr% ${s.swstr_pct}`,
-                    s.k_9 !== undefined && `K/9 ${s.k_9}`,
-                    s.whip !== undefined && `WHIP ${s.whip}`,
-                    s.ip !== undefined && `IP ${s.ip}`,
-                    s.correa_pitcheos_promedio !== undefined && `correa ~${s.correa_pitcheos_promedio} pitcheos`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}{" "}
-                  ({s.fuente})
-                </Text>
-              ))}
-              {respuestaIA.statsEquipoGuardados.map((s, i) => (
-                <Text key={`e${i}`} style={{ color: colores.textoSuave, fontSize: 12 }}>
-                  • {s.equipo} vs {s.vs_mano} ({s.ventana}):{" "}
-                  {[
-                    s.k_pct !== undefined && `K% ${s.k_pct}`,
-                    s.swing_pct !== undefined && `Swing% ${s.swing_pct}`,
-                    s.chase_pct !== undefined && `Chase% ${s.chase_pct}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}{" "}
-                  ({s.fuente})
-                </Text>
-              ))}
-            </View>
-          )}
+          <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 18 }}>
+            {proyeccion.pitcher}
+            {proyeccion.stats_usadas.k_pct != null ? ` · K% ${proyeccion.stats_usadas.k_pct}` : ""}
+            {proyeccion.stats_usadas.whip != null ? ` · WHIP ${proyeccion.stats_usadas.whip}` : ""}
+            {proyeccion.stats_usadas.ip_por_salida != null
+              ? ` · ${proyeccion.stats_usadas.ip_por_salida} IP por salida`
+              : ""}
+            {proyeccion.rival ? `\nRival: ${proyeccion.fuente_k_rival}` : ""}
+          </Text>
 
-          {respuestaIA.juicioIA.propuesta_aprendizaje && (
-            <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: colores.borde, paddingTop: 8 }}>
-              <Text style={{ color: colores.acento, fontWeight: "700", fontSize: 12 }}>
-                PROPUESTA PARA LA BITÁCORA DE APRENDIZAJE
-              </Text>
-              <Text style={{ color: colores.texto }}>{respuestaIA.juicioIA.propuesta_aprendizaje.descubrimiento}</Text>
-              {respuestaIA.juicioIA.propuesta_aprendizaje.por_que_importa && (
-                <Text style={{ color: colores.textoSuave }}>
-                  {respuestaIA.juicioIA.propuesta_aprendizaje.por_que_importa}
-                </Text>
-              )}
-              {aprendizajeGuardado ? (
-                <Mensaje tipo="exito" texto="Guardado en la bitácora." />
-              ) : (
-                <Boton
-                  titulo="Guardar en bitácora"
-                  variante="secundario"
-                  onPress={guardarAprendizaje}
-                  cargando={guardandoAprendizaje}
-                />
-              )}
-            </View>
+          {proyeccion.advertencias.map((a, i) => (
+            <Mensaje key={i} tipo="info" texto={a} />
+          ))}
+
+          {!coincide && proyeccion.veredicto && (
+            <Mensaje
+              tipo="error"
+              texto={`Elegiste ${pick} pero la proyección favorece ${proyeccion.veredicto}. Revisá antes de guardar.`}
+            />
           )}
         </Tarjeta>
       )}
 
-      <Campo
-        etiqueta="Confianza final (%) — puedes ajustarla a mano"
-        value={confianza}
-        onChangeText={setConfianza}
-        keyboardType="decimal-pad"
-        placeholder="82"
-      />
-
-      <View>
-        <Text style={estilos.etiqueta}>NIVEL — qué tan segura es esta jugada</Text>
-        <Text style={{ color: colores.textoSuave, fontSize: 12, marginBottom: 6 }}>
-          Va de la mano con el % de confianza de arriba: {RANGO_NIVEL[nivel]} = {ETIQUETA_NIVEL[nivel]}. De 85% para
-          arriba es donde conviene más jugar; Impureza (79% o menos) normalmente no se juega.
+      <Seccion titulo="Guardar" />
+      <Tarjeta>
+        <Campo
+          etiqueta="Confianza final (%)"
+          value={confianza}
+          onChangeText={setConfianza}
+          keyboardType="decimal-pad"
+          placeholder="82"
+        />
+        <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 17 }}>
+          {proyeccion
+            ? "Viene de la calculadora. Podés ajustarla si sabés algo que ella no (lineup, lesión, clima)."
+            : "Calculá primero para que se llene sola, o ponela a mano."}
         </Text>
-        <View style={[estilos.filaSelector, { flexWrap: "wrap" }]}>
-          {NIVELES.map((n) => (
-            <Boton
-              key={n}
-              titulo={ETIQUETA_NIVEL[n]}
-              variante={nivel === n ? "primario" : "secundario"}
-              onPress={() => setNivel(n)}
-            />
-          ))}
-        </View>
-      </View>
 
-      {error && <Mensaje tipo="error" texto={error} />}
+        <View style={{ gap: 6, marginTop: 6 }}>
+          <Text style={estilos.etiqueta}>Nivel</Text>
+          <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 17 }}>
+            Va con la confianza de arriba: {RANGO_NIVEL[nivel]} = {ETIQUETA_NIVEL[nivel]}. De 85% para arriba es donde
+            conviene jugar.
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 2 }}>
+            {NIVELES.map((n) => (
+              <Pressable
+                key={n}
+                onPress={() => setNivel(n)}
+                style={[estilos.chip, nivel === n && estilos.chipActivo, { paddingHorizontal: 12, paddingVertical: 7 }]}
+              >
+                <Text style={[estilos.chipTexto, nivel === n && estilos.chipTextoActivo, { fontSize: 13 }]}>
+                  {ETIQUETA_NIVEL[n]}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </Tarjeta>
+
+      {/* Fecha y código casi nunca se tocan: no merecen espacio permanente. */}
+      {opcionesAbiertas ? (
+        <Tarjeta>
+          <View style={estilos.filaEntreEspacio}>
+            <Text style={{ color: colores.texto, fontWeight: "700", fontSize: 14 }}>Opcional</Text>
+            <Pressable onPress={() => setOpcionesAbiertas(false)} hitSlop={10}>
+              <Text style={{ color: colores.textoSuave, fontSize: 13 }}>Ocultar</Text>
+            </Pressable>
+          </View>
+          <Campo etiqueta="Fecha" value={fecha} onChangeText={setFecha} placeholder="2026-08-27" />
+          <Campo etiqueta="Código del ticket" value={codigo} onChangeText={setCodigo} placeholder="Star Sport" />
+        </Tarjeta>
+      ) : (
+        <Pressable
+          onPress={() => setOpcionesAbiertas(true)}
+          style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 }}
+          hitSlop={8}
+        >
+          <Ionicons name="options-outline" size={16} color={colores.textoSuave} />
+          <Text style={{ color: colores.textoSuave, fontSize: 13 }}>Fecha y código del ticket</Text>
+        </Pressable>
+      )}
+
       {ok && <Mensaje tipo="exito" texto={ok} />}
 
-      <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
-        CALCULADA = salió de contar resultados reales de este pitcher (más confiable). JUICIO = es tu opinión o la de
-        la IA, no un conteo real — usalo para todo lo que no venga de historial real.
-      </Text>
-      <Boton
-        titulo="Guardar como CALCULADA (de su historial real)"
-        onPress={() => guardarPick("CALCULADA")}
-        cargando={guardando}
-      />
-      <Boton
-        titulo="Guardar como JUICIO (mío o de la IA)"
-        onPress={() => guardarPick("JUICIO")}
-        cargando={guardando}
-        variante="secundario"
-      />
+      <Boton titulo="Guardar pick" onPress={guardar} cargando={guardando} />
     </ScrollView>
   );
 }

@@ -17,3 +17,19 @@
 --
 -- La versión en TypeScript de la misma matemática, con sus pruebas, está en
 -- packages/core/src/proyeccion.ts — ambas deben dar el mismo número.
+
+-- Correcciones posteriores aplicadas el mismo día:
+--
+-- 1. proyectar_ponches usaba `array || 'texto'` para acumular supuestos y
+--    advertencias. Postgres resuelve ese || contra anyarray||anyarray e
+--    intenta castear el string a array, lo que reventaba con "malformed
+--    array literal". Solo pasaba cuando FALTABA un dato, o sea justo en la
+--    rama que esa línea pretendía cubrir, así que no salió en las pruebas
+--    con datos completos. Reemplazado por array_append().
+--
+-- 2. La vista pitcher_stats_actual quedaba como SECURITY DEFINER implícito
+--    y salteaba las políticas RLS de las tablas base. Ahora tiene
+--    security_invoker = true.
+--
+-- 3. buscar_pitcher y proyectar_ponches tenían search_path mutable (vía
+--    para secuestro de esquema). Fijado a public, pg_catalog.
