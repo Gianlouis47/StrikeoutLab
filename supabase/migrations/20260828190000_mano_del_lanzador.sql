@@ -94,3 +94,31 @@
 --
 -- El contenido exacto está aplicado en la base; este archivo queda como
 -- registro.
+
+-- ============================================================
+-- ADDENDA: dos lints que rompió esta misma migración
+-- ============================================================
+--
+-- Soltar y recrear la vista para agregarle la columna la devolvió con
+-- security_invoker APAGADO, que es el default de Postgres. Una vista
+-- SECURITY DEFINER corre con los permisos de quien la creó y no de quien
+-- consulta, así que se saltea el RLS del que pregunta. Acá los datos son
+-- públicos de la liga, pero dejar una vista definer en `public` es la clase
+-- de descuido que después se copia a una tabla que sí importa.
+--
+--   alter view pitcher_stats_actual set (security_invoker = on);
+--
+-- Y proyectar_varios había quedado sin search_path fijo, cosa que el resto
+-- de las funciones del proyecto sí tienen. Sin eso, quien la llame puede
+-- anteponer un esquema propio y hacer que proyectar_ponches resuelva a otra
+-- función.
+--
+--   alter function proyectar_varios(jsonb, integer, text)
+--     set search_path = public, pg_catalog;
+--
+-- Ojo al comprobar el primero: consultar la vista con `set role
+-- authenticated` a secas devuelve CERO filas y parece que se rompió todo.
+-- No es la vista: la política dice `auth.role() = 'authenticated'`, y sin
+-- las claims del JWT esa función devuelve null. Con las claims puestas
+-- devuelve los 825 lanzadores. El susto es del método de prueba, no del
+-- cambio.
