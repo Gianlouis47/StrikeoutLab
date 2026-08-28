@@ -207,6 +207,79 @@ const HERRAMIENTAS = [
   {
     type: "function",
     function: {
+      name: "evaluar_apuesta",
+      description:
+        "Convierte una probabilidad y la cuota de la casa en decisión: CONVIENE / FLOJO / NO CONVIENE. Al -130 hay que acertar 56.5% solo para no perder plata, así que una proyección al 58% es ganadora pero flaquísima. Llamalo SIEMPRE después de proyectar, con la confianza que dio la calculadora.",
+      parameters: {
+        type: "object",
+        properties: {
+          probabilidad: { type: "number", description: "0 a 1, la confianza de proyectar_ponches" },
+          cuota: { type: "number", description: "Cuota americana de Star Sport. Casi siempre -130." },
+          prob_empate: { type: "number", description: "Probabilidad de empate exacto, si la línea es entera" },
+        },
+        required: ["probabilidad"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "evaluar_parlay",
+      description:
+        "LA HERRAMIENTA PARA PARLAYS. Dadas las confianzas de varias patas, corrige por la calibración real del historial y devuelve: la escalera de 1 a 12 patas con probabilidad, valor esperado, con cuánto terminás (mediana y promedio) y probabilidad de fundirte, más cuántas patas convienen. Usala siempre que se hable de combinar picks — nunca multipliques confianzas de cabeza.",
+      parameters: {
+        type: "object",
+        properties: {
+          probabilidades: {
+            type: "array",
+            items: { type: "number" },
+            description: "Confianza de cada pata, 0 a 1, tal como la dio proyectar_ponches",
+          },
+          etiquetas: {
+            type: "array",
+            items: { type: "string" },
+            description: "Nombre de cada pata, ej. ['deGrom O7', 'Skubal O6.5']",
+          },
+          cuota: { type: "number", description: "Cuota americana por pata. Casi siempre -130." },
+          apuesta_fija_pct: {
+            type: "number",
+            description: "Qué porcentaje del bankroll apuesta por ticket. Por defecto 5.",
+          },
+        },
+        required: ["probabilidades"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "picks_guardados",
+      description:
+        "Devuelve los picks ya guardados de una fecha, con su confianza. Usalo cuando el usuario pregunte qué parlay armar con lo que ya tiene, o para no volver a proyectar algo que ya está guardado.",
+      parameters: {
+        type: "object",
+        properties: {
+          fecha: { type: "string", description: "YYYY-MM-DD. Si no se pasa, hoy." },
+          solo_pendientes: {
+            type: "boolean",
+            description: "Solo los que todavía no tienen resultado. Por defecto true.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "calibracion_real",
+      description:
+        "Cuánto vale de verdad la confianza del modelo, medido contra los picks que ya tienen resultado. Usalo cuando el usuario pregunte si puede confiar en los números, o cuando quieras respaldar por qué recomendás menos patas de las que él quiere.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "buscar_web",
       description:
         "Busca en internet datos actuales que no estén en la base: lineup confirmado de hoy, clima, lesiones, noticias. No lo uses para estadísticas de temporada, esas ya están guardadas.",
@@ -325,6 +398,48 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
       return { guardado: true, pitcher, mensaje: `Pick de ${pitcher} guardado.` };
     }
 
+    case "evaluar_apuesta": {
+      const { data, error } = await supabase.rpc("evaluar_apuesta", {
+        p_prob_ganar: args.probabilidad,
+        p_cuota: args.cuota ?? -130,
+        p_prob_empate: args.prob_empate ?? 0,
+      });
+      if (error) return { error: error.message };
+      return data;
+    }
+
+    case "evaluar_parlay": {
+      const { data, error } = await supabase.rpc("evaluar_parlay", {
+        p_probabilidades: args.probabilidades ?? [],
+        p_cuota: args.cuota ?? -130,
+        p_apuestas_por_temporada: 100,
+        p_etiquetas: args.etiquetas ?? null,
+        p_apuesta_fija_pct: args.apuesta_fija_pct ?? 5,
+      });
+      if (error) return { error: error.message };
+      return data;
+    }
+
+    case "picks_guardados": {
+      let consulta = supabase
+        .from("picks")
+        .select("pitcher, equipo, rival, linea, pick, confianza, nivel, resultado")
+        .eq("fecha", args.fecha ?? new Date().toISOString().slice(0, 10));
+      if (args.solo_pendientes !== false) consulta = consulta.is("resultado", null);
+      const { data, error } = await consulta.order("confianza", { ascending: false });
+      if (error) return { error: error.message };
+      if (!data || data.length === 0) {
+        return { cantidad: 0, mensaje: "No hay picks guardados para esa fecha." };
+      }
+      return { cantidad: data.length, picks: data };
+    }
+
+    case "calibracion_real": {
+      const { data, error } = await supabase.rpc("calibracion_real");
+      if (error) return { error: error.message };
+      return data;
+    }
+
     case "buscar_web": {
       const tavilyKey = Deno.env.get("TAVILY_API_KEY");
       if (!tavilyKey) return "Búsqueda web no configurada. Respondé con lo que ya tenés.";
@@ -364,19 +479,34 @@ CÓMO TRABAJÁS:
 - Si la foto es de un juego YA TERMINADO (boxscore con resultados), guardá esa salida con "guardar_salida" sin que te lo pidan, y después contá qué guardaste. Así se alimenta el historial real.
 - Si es un ticket o una línea de un juego que todavía no se juega, proyectá y dale tu recomendación.
 - Solo guardás un pick con "guardar_pick" si el usuario lo pide o confirma.
+- Después de proyectar, llamá SIEMPRE a "evaluar_apuesta" con esa confianza y la cuota (-130 salvo que el ticket diga otra). La probabilidad sola no decide nada: lo que decide es si le gana a la cuota.
+- Para cualquier combinada, llamá a "evaluar_parlay". Nunca multipliques confianzas de cabeza ni digas "las dos al 85% dan 85%".
 
 CÓMO RESPONDÉS:
-- Empezá por el resultado, no por el proceso: "deGrom vs CIN, línea 7: proyecta 7.9 K → OVER, 62% de confianza."
+- Empezá por el resultado, no por el proceso: "deGrom vs CIN, línea 7: proyecta 7.9 K → OVER, 62%. Al -130 eso CONVIENE: 9.7 centavos de ganancia por peso."
 - Después, en pocas líneas, el porqué: K% del lanzador, cómo batea el rival, cuántos innings suele durar.
 - Si la calculadora devuelve advertencias (muestra chica, empate probable, nombre ambiguo, faltan datos), decilas. No las escondas.
 - Cuando "ajuste_por_muestra" muestre que el K% ajustado quedó lejos del crudo, citá SIEMPRE el ajustado y explicá por qué en una línea: con pocos bateadores enfrentados el número crudo es suerte, no habilidad. Nunca digas el K% crudo como si fuera la tasa real del lanzador.
 - Si algo no se puede saber, decilo claro. Nunca inventes una estadística ni un lineup.
 - Nada de tablas gigantes ni respuestas de tres pantallas: es una app de celular, andá al grano.
 
+NO TE QUEDES CALLADO — ESTA ES LA PARTE QUE MÁS IMPORTA:
+Gianlouis te da la información y vos hacés el trabajo, pero eso no es contestar y callarte. Después de dar el resultado, SIEMPRE seguís la conversación con algo útil, y la seguís hasta que él diga que ya está. Cerrá cada respuesta con una sugerencia concreta o una pregunta, nunca con un punto final seco.
+
+Qué ofrecer, según el caso:
+- **Si recomendás menos patas de las que él quiere**, no te limites a decir que no. Ofrecé la salida de dos tickets: "la escalera dice que lo óptimo son 3 patas — armá ese, que es el que la matemática banca, y si querés jugar más, hacé un segundo ticket aparte con las que vos elijas y jugalo con menos plata. Así el bueno no se contamina con el arriesgado." Y decile cuáles son las patas más seguras y cuáles las que él estaría metiendo por gusto.
+- **Si un pick queda FLOJO o NO CONVIENE**, ofrecé alternativas: otro lanzador del mismo día, la línea del otro lado, o esperar. Preguntale si quiere que revises los demás juegos de la fecha.
+- **Si falta un dato** (rival, mano del lanzador, cuota distinta, si la línea es entera o con medio punto), preguntalo directo en una línea. Una pregunta a la vez, no un cuestionario.
+- **Si el resultado depende de un supuesto** (lineup no confirmado, lanzador con muestra chica, cambio de equipo), decilo y ofrecé buscarlo en la web.
+- **Si el pick es bueno**, ofrecé guardarlo, o preguntá si quiere que le busques con qué combinarlo.
+- **Si él insiste en algo que la matemática no banca** (12 patas, un pick de 56%), no discutas dos veces: dijiste tu parte, ahora dale lo que pide bien hecho — el número real de esa jugada, cuánto arriesgar para que no lo funda, y qué versión más segura tiene al lado.
+
 REGLAS DURAS:
 - Nunca inventes un número. Si no está en la base o en una búsqueda, no existe.
-- Una línea entera (ej. 7) puede terminar en empate y devuelven la plata: tenelo en cuenta al recomendar.
-- De 85% de confianza para arriba es donde conviene jugar. Abajo de 80%, decí que no vale la pena.
+- Una línea entera (ej. 7) puede terminar en empate y devuelven la plata: tenelo en cuenta al recomendar, y avisá que en parlay eso depende de qué haga Star Sport con la pata.
+- El corte no es la confianza, es la cuota: al -130 hace falta 56.5% para empatar. "Conviene" lo dice evaluar_apuesta, no vos.
+- La confianza del modelo está inflada y hay historial que lo prueba. Si él pregunta por qué bajás los números, llamá a "calibracion_real" y mostrale los aciertos reales contra la confianza declarada.
+- El valor esperado de un parlay SUBE con cada pata y aun así te funde: son cosas distintas. Si citás el valor esperado de un parlay largo, citá al lado la mediana y la probabilidad de fundirte, o estás mintiendo por omisión.
 - Si el nombre del lanzador es ambiguo (la calculadora te avisa), preguntá cuál es antes de dar la recomendación por buena.`;
 
 // ---------------------------------------------------------------------

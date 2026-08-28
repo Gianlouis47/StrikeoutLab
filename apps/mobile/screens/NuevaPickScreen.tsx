@@ -14,7 +14,12 @@ import {
   colores,
   estilos,
 } from "../components/ui";
-import { proyectarPonches, type Proyeccion } from "../lib/calculadora";
+import {
+  evaluarApuesta,
+  proyectarPonches,
+  type EvaluacionApuesta,
+  type Proyeccion,
+} from "../lib/calculadora";
 import type { DatosExtraidosFoto } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
 import { pickNuevoSchema } from "../lib/validators";
@@ -91,6 +96,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   const [opcionesAbiertas, setOpcionesAbiertas] = useState(false);
   const [calculando, setCalculando] = useState(false);
   const [proyeccion, setProyeccion] = useState<Proyeccion | null>(null);
+  const [evaluacion, setEvaluacion] = useState<EvaluacionApuesta | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -125,6 +131,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       });
       if (!r.encontrado) {
         setProyeccion(null);
+        setEvaluacion(null);
         setError(r.mensaje);
         return;
       }
@@ -133,6 +140,9 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       setConfianza((r.confianza * 100).toFixed(0));
       setNivel(r.nivel);
       if (r.veredicto) setPick(r.veredicto);
+      // Y aparte, si contra la cuota conviene o no: la probabilidad sola no
+      // decide nada.
+      setEvaluacion(await evaluarApuesta({ probabilidad: r.confianza, probEmpate: r.prob_empate }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -189,6 +199,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       setCodigo("");
       setConfianza("");
       setProyeccion(null);
+      setEvaluacion(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -342,6 +353,43 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
               </View>
             )}
           </View>
+
+          {/* Antes de las estadísticas: si contra la cuota conviene o no. Esa
+              es la pregunta, no cuál es la probabilidad. */}
+          {evaluacion && (
+            <View
+              style={{
+                borderTopWidth: 1,
+                borderTopColor: colores.borde,
+                paddingTop: 10,
+                marginTop: 4,
+                gap: 4,
+              }}
+            >
+              <View style={estilos.filaEntreEspacio}>
+                <Text
+                  style={{
+                    color:
+                      evaluacion.veredicto === "CONVIENE"
+                        ? colores.exito
+                        : evaluacion.veredicto === "FLOJO"
+                          ? colores.advertencia
+                          : colores.peligro,
+                    fontSize: 17,
+                    fontWeight: "800",
+                  }}
+                >
+                  {evaluacion.veredicto}
+                </Text>
+                <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+                  al {evaluacion.cuota_americana} · pide {(evaluacion.prob_de_equilibrio * 100).toFixed(1)}%
+                </Text>
+              </View>
+              <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 18 }}>
+                {evaluacion.explicacion}
+              </Text>
+            </View>
+          )}
 
           <View style={{ height: 1, backgroundColor: colores.borde, marginVertical: 6 }} />
 

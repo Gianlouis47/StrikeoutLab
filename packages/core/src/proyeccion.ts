@@ -82,13 +82,24 @@ export const ESTABILIZACION = {
 } as const;
 
 /**
- * Recta SwStr% → K% medida sobre nuestros propios datos (55 lanzadores,
- * R² = 0.75). Sirve como ancla mejor que el promedio de liga: el
- * swing-and-miss explica tres cuartas partes de la varianza del K% y
- * estabiliza en cientos de lanzamientos, no de bateadores.
+ * Recta whiff% → K%, ajustada sobre lanzadores con 400+ bateadores
+ * enfrentados (120 lanzadores, R² = 0.79). Es mejor ancla que el promedio de
+ * liga: el swing-and-miss explica cuatro quintas partes de la varianza del
+ * K% y estabiliza en cientos de lanzamientos, no de bateadores.
+ *
+ * Se ajusta solo sobre muestras firmes a propósito. Ajustarla sobre todos
+ * aplana la pendiente (0.76 en vez de 1.02) porque el ruido en el whiff% de
+ * muestra chica la atenúa hacia cero, y quedaría una recta que subestima a
+ * los dominantes — justo a quienes más falta les hace.
  *
  * En Postgres esto se recalcula en cada llamada con `regr_slope`, así que
- * mejora solo a medida que cargamos datos. Acá quedan los valores medidos.
+ * mejora solo a medida que pasa la temporada. Acá quedan los valores medidos.
+ */
+export const RECTA_WHIFF_A_K = { pendiente: 1.0237, intercepto: -3.0555, r2: 0.789 } as const;
+
+/**
+ * Recta SwStr% → K% (55 lanzadores, R² = 0.75). Respaldo para quien tenga
+ * SwStr% de FanGraphs pero no whiff% de Savant.
  */
 export const RECTA_SWSTR_A_K = { pendiente: 2.0887, intercepto: 0.1239, r2: 0.7501 } as const;
 
@@ -130,7 +141,9 @@ export interface EntradaProyeccion {
   ipTotales?: number;
   /** Salidas de la temporada — la muestra de `ipPorSalida`. */
   salidas?: number;
-  /** SwStr% del lanzador: si está, es mejor ancla que el promedio de liga. */
+  /** whiff% del lanzador (Savant): la mejor ancla que tenemos. */
+  whiffPctPitcher?: number;
+  /** SwStr% del lanzador (FanGraphs): ancla de respaldo si no hay whiff%. */
   swstrPctPitcher?: number;
   /** Falso para relevistas: cambia el ancla de duración de la salida. */
   esAbridor?: boolean;
@@ -251,9 +264,15 @@ export function proyectarPonches(entrada: EntradaProyeccion): ResultadoProyeccio
   }
 
   // --- Ancla del K%: SwStr% si lo hay, si no el promedio de liga ---
+  // whiff% primero: mejor R² y lo tenemos para casi todos los lanzadores.
   let anclaKPct: number;
   let anclaUsada: string;
-  if (entrada.swstrPctPitcher !== undefined) {
+  if (entrada.whiffPctPitcher !== undefined) {
+    const predicho = RECTA_WHIFF_A_K.pendiente * entrada.whiffPctPitcher + RECTA_WHIFF_A_K.intercepto;
+    anclaKPct = Math.min(45, Math.max(3, predicho));
+    anclaUsada = `whiff% ${entrada.whiffPctPitcher.toFixed(1)}% → ${anclaKPct.toFixed(1)}% K esperado (R²=${RECTA_WHIFF_A_K.r2.toFixed(2)})`;
+    entradasUsadas.push(`whiff% (${entrada.whiffPctPitcher.toFixed(1)}%) como ancla`);
+  } else if (entrada.swstrPctPitcher !== undefined) {
     const predicho = RECTA_SWSTR_A_K.pendiente * entrada.swstrPctPitcher + RECTA_SWSTR_A_K.intercepto;
     anclaKPct = Math.min(45, Math.max(3, predicho));
     anclaUsada = `SwStr% ${entrada.swstrPctPitcher.toFixed(1)}% → ${anclaKPct.toFixed(1)}% K esperado (R²=${RECTA_SWSTR_A_K.r2.toFixed(2)})`;

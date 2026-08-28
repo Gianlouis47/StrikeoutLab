@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { Barra, Boton, Insignia, Mensaje, colores, estilos } from "../components/ui";
-import type { Proyeccion } from "../lib/calculadora";
+import type { EvaluacionApuesta, Proyeccion } from "../lib/calculadora";
 import { chat, type MensajeChat } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
 
@@ -26,6 +26,8 @@ interface Burbuja {
   detalle?: string[];
   /** Pick ya armado por la calculadora, listo para guardar de un toque. */
   pick?: Proyeccion;
+  /** Si conviene o no contra la cuota. La probabilidad sola no decide nada. */
+  evaluacion?: EvaluacionApuesta;
   /** id del pick en la base una vez guardado, para no duplicarlo. */
   pickGuardadoId?: string;
 }
@@ -41,6 +43,22 @@ function extraerPick(herramientas: Array<{ nombre: string; resultado: unknown }>
     if (h.nombre !== "proyectar_ponches") continue;
     const r = h.resultado as Proyeccion | { encontrado: false } | null;
     if (r && typeof r === "object" && "encontrado" in r && r.encontrado) return r as Proyeccion;
+  }
+  return undefined;
+}
+
+/**
+ * Saca la evaluación contra la cuota. La IA la pide siempre después de
+ * proyectar, así que no hace falta una segunda llamada desde acá.
+ */
+function extraerEvaluacion(
+  herramientas: Array<{ nombre: string; resultado: unknown }>,
+): EvaluacionApuesta | undefined {
+  for (let i = herramientas.length - 1; i >= 0; i--) {
+    const h = herramientas[i];
+    if (h.nombre !== "evaluar_apuesta") continue;
+    const r = h.resultado as EvaluacionApuesta | { error: string } | null;
+    if (r && typeof r === "object" && "veredicto" in r) return r as EvaluacionApuesta;
   }
   return undefined;
 }
@@ -158,6 +176,7 @@ export default function ChatScreen() {
           texto: r.respuesta,
           detalle,
           pick: extraerPick(herramientas),
+          evaluacion: extraerEvaluacion(herramientas),
           pickGuardadoId: yaLoGuardoLaIA(herramientas) ? "guardado-por-la-ia" : undefined,
         },
       ]);
@@ -207,6 +226,13 @@ export default function ChatScreen() {
     const ajusteVisible =
       p.ajuste_por_muestra?.k_pct_crudo != null &&
       Math.abs(p.ajuste_por_muestra.k_pct_ajustado - p.ajuste_por_muestra.k_pct_crudo) >= 1.5;
+    const ev = burbuja.evaluacion;
+    const colorVeredicto =
+      ev?.veredicto === "CONVIENE"
+        ? colores.exito
+        : ev?.veredicto === "FLOJO"
+          ? colores.advertencia
+          : colores.peligro;
 
     return (
       <View
@@ -261,6 +287,36 @@ export default function ChatScreen() {
           tono={p.confianza >= 0.85 ? "exito" : p.confianza >= 0.8 ? "advertencia" : "peligro"}
           alto={5}
         />
+
+        {/* La probabilidad sola no decide nada: al -130 hace falta 56.5% solo
+            para no perder plata. Esto es lo que responde "¿la juego?". */}
+        {ev && (
+          <View
+            style={{
+              borderTopWidth: 1,
+              borderTopColor: colores.borde,
+              paddingTop: 9,
+              gap: 4,
+            }}
+          >
+            <View style={estilos.filaEntreEspacio}>
+              <Text style={{ color: colorVeredicto, fontSize: 15, fontWeight: "800" }}>
+                {ev.veredicto}
+              </Text>
+              <Text style={{ color: colores.textoSuave, fontSize: 11 }}>
+                al {ev.cuota_americana} · pide {(ev.prob_de_equilibrio * 100).toFixed(1)}%
+              </Text>
+            </View>
+            <Text style={{ color: colores.textoSuave, fontSize: 11, lineHeight: 16 }}>
+              {ev.retorno_pct >= 0
+                ? `Ganás ${ev.retorno_pct.toFixed(1)} centavos por peso.`
+                : `Perdés ${Math.abs(ev.retorno_pct).toFixed(1)} centavos por peso.`}
+              {ev.apuesta_recomendada_pct > 0
+                ? ` Apostá hasta ${ev.apuesta_recomendada_pct.toFixed(1)}% del bankroll.`
+                : ""}
+            </Text>
+          </View>
+        )}
 
         {/* Si la muestra del lanzador es chica, el número crudo no es una tasa
             sino ruido, y la calculadora lo corrigió. Vale decirlo acá mismo:

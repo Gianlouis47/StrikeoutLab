@@ -202,19 +202,29 @@ describe("proyectarPonches — regresión a la media", () => {
     expect(ajustados.at(-1)!).toBeLessThan(35);
   });
 
-  it("usa el SwStr% como ancla en vez del promedio de liga cuando lo tiene", () => {
-    const conSwstr = proyectarPonches({
-      linea: 6.5, kPctPitcher: 35, ipTotales: 8, salidas: 2, swstrPctPitcher: 15.2, ligaKPct: 22.2,
+  it("usa el whiff% como ancla en vez del promedio de liga cuando lo tiene", () => {
+    // El caso real de Zach Eflin: una sola salida, 41.2% de K% que no se puede
+    // creer, pero un whiff% de 35.3% que dice que sí es ponchador de verdad.
+    const conWhiff = proyectarPonches({
+      linea: 5.5, kPctPitcher: 41.2, ipTotales: 3.67, salidas: 1, whiffPctPitcher: 35.3, ligaKPct: 22.1,
     });
-    const sinSwstr = proyectarPonches({
-      linea: 6.5, kPctPitcher: 35, ipTotales: 8, salidas: 2, ligaKPct: 22.2,
+    const sinWhiff = proyectarPonches({
+      linea: 5.5, kPctPitcher: 41.2, ipTotales: 3.67, salidas: 1, ligaKPct: 22.1,
     });
-    expect(conSwstr.ajustePorMuestra.anclaUsada).toContain("SwStr%");
-    // 15.2% de SwStr predice ~31.9% de K: un ancla mucho más alta que el
-    // 22.2% de liga, así que al mismo K% observado le cree más.
-    expect(conSwstr.ajustePorMuestra.kPctAjustado).toBeGreaterThan(
-      sinSwstr.ajustePorMuestra.kPctAjustado,
-    );
+    expect(conWhiff.ajustePorMuestra.anclaUsada).toContain("whiff%");
+    // Sin whiff% lo aplastamos contra el 22.1% de liga; con whiff% el ancla
+    // sube a ~33% y el ajustado queda mucho más alto.
+    expect(sinWhiff.ajustePorMuestra.kPctAjustado).toBeLessThan(28);
+    expect(conWhiff.ajustePorMuestra.kPctAjustado).toBeGreaterThan(32);
+  });
+
+  it("cae al SwStr% cuando no hay whiff%, y a la liga cuando no hay ninguno", () => {
+    const base = { linea: 6.5, kPctPitcher: 35, ipTotales: 8, salidas: 2, ligaKPct: 22.2 };
+    expect(proyectarPonches({ ...base, whiffPctPitcher: 30, swstrPctPitcher: 15.2 })
+      .ajustePorMuestra.anclaUsada).toContain("whiff%");
+    expect(proyectarPonches({ ...base, swstrPctPitcher: 15.2 })
+      .ajustePorMuestra.anclaUsada).toContain("SwStr%");
+    expect(proyectarPonches(base).ajustePorMuestra.anclaUsada).toContain("promedio de liga");
   });
 
   it("sin K% observado la proyección sale entera del ancla", () => {

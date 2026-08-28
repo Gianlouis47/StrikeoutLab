@@ -108,3 +108,114 @@ export async function buscarPitcher(nombre: string): Promise<CandidatoPitcher[]>
   if (error) throw new Error(error.message);
   return (data ?? []) as CandidatoPitcher[];
 }
+
+/** Cuota típica de Star Sport: arriesgar 130 para ganar 100. */
+export const CUOTA_POR_DEFECTO = -130;
+
+export type VeredictoApuesta = "CONVIENE" | "FLOJO" | "NO CONVIENE";
+
+export interface EvaluacionApuesta {
+  cuota_americana: number;
+  ganancia_por_peso: number;
+  /** El porcentaje que hay que acertar solo para no perder plata. */
+  prob_de_equilibrio: number;
+  prob_ganar: number;
+  prob_perder: number;
+  prob_empate: number;
+  ventaja: number;
+  valor_esperado: number;
+  retorno_pct: number;
+  kelly_completo: number;
+  apuesta_recomendada_pct: number;
+  veredicto: VeredictoApuesta;
+  explicacion: string;
+}
+
+/**
+ * Convierte la confianza de la proyección en decisión, contra la cuota real.
+ * La probabilidad sola no decide nada: al -130 hace falta 56.5% para empatar.
+ */
+export async function evaluarApuesta(params: {
+  probabilidad: number;
+  cuota?: number;
+  probEmpate?: number;
+}): Promise<EvaluacionApuesta> {
+  const { data, error } = await supabase.rpc("evaluar_apuesta", {
+    p_prob_ganar: params.probabilidad,
+    p_cuota: params.cuota ?? CUOTA_POR_DEFECTO,
+    p_prob_empate: params.probEmpate ?? 0,
+  });
+  if (error) throw new Error(error.message);
+  return data as EvaluacionApuesta;
+}
+
+export interface Calibracion {
+  factor: number;
+  confiabilidad: "SIN DATOS" | "PRELIMINAR" | "RAZONABLE" | "BUENA";
+  picks_decididos: number;
+  aciertos: number;
+  empates: number;
+  tasa_observada: number | null;
+  tasa_estimada: number | null;
+  confianza_declarada_media: number | null;
+  explicacion: string;
+}
+
+export interface EscalonParlay {
+  patas: number;
+  probabilidad: number;
+  pago_por_peso: number;
+  valor_esperado: number;
+  apuesta_recomendada_pct: number;
+  terminas_con_mediana: number;
+  terminas_con_promedio: number;
+  prob_fundirte: number;
+}
+
+export interface EvaluacionParlay {
+  calibracion: Calibracion;
+  cuota_por_pata: number;
+  apuestas_simuladas: number;
+  apuesta_fija_pct: number;
+  modo: string;
+  patas: Array<{ etiqueta: string; confianza_declarada: number; confianza_honesta: number }>;
+  tu_parlay: {
+    patas: number;
+    probabilidad: number;
+    pago_por_peso: number;
+    valor_esperado: number;
+    veredicto: VeredictoApuesta;
+  };
+  escalera: EscalonParlay[];
+  como_leer_la_escalera: string;
+  recomendacion: { patas_optimas: number | null; criterio: string };
+  nota_empate: string;
+}
+
+/**
+ * Evalúa un parlay con las confianzas ya corregidas por la calibración real,
+ * y devuelve la escalera de 1 a 12 patas para poder ver dónde conviene cortar.
+ */
+export async function evaluarParlay(params: {
+  probabilidades: number[];
+  etiquetas?: string[];
+  cuota?: number;
+  apuestaFijaPct?: number;
+}): Promise<EvaluacionParlay> {
+  const { data, error } = await supabase.rpc("evaluar_parlay", {
+    p_probabilidades: params.probabilidades,
+    p_cuota: params.cuota ?? CUOTA_POR_DEFECTO,
+    p_apuestas_por_temporada: 100,
+    p_etiquetas: params.etiquetas ?? null,
+    p_apuesta_fija_pct: params.apuestaFijaPct ?? 5,
+  });
+  if (error) throw new Error(error.message);
+  return data as EvaluacionParlay;
+}
+
+/** Cuánto vale de verdad la confianza del modelo, según el historial. */
+export async function calibracionReal(): Promise<Calibracion> {
+  const { data, error } = await supabase.rpc("calibracion_real");
+  if (error) throw new Error(error.message);
+  return data as Calibracion;
+}
