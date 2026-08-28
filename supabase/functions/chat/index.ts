@@ -39,7 +39,17 @@ const MODELOS_RAZONAMIENTO = (Deno.env.get("NVIDIA_MODELOS_TEXTO") ??
   .map((m) => m.trim())
   .filter(Boolean);
 
-const MAX_RONDAS = 6;
+// Cuántas veces puede volver el modelo a pedir herramientas antes de tener
+// que contestar. El tope existe por el límite de tiempo de la Edge Function,
+// no por capricho.
+//
+// Con 6 y sin proyectar_varios, una cartelera de 15 juegos era imposible: el
+// modelo gastaba las seis rondas proyectando seis lanzadores de treinta y el
+// usuario recibía "me quedé dando vueltas" con cero respuesta. Pasó en
+// producción. La solución de fondo es proyectar_varios, que hace los treinta
+// en una ronda; esto es el margen para los pasos de alrededor (buscar el
+// rival, armar el parlay, guardar).
+const MAX_RONDAS = 9;
 
 /** Qué versión del sistema produce las confianzas de hoy. Ver picks.sistema. */
 const SISTEMA_ACTUAL = "PROYECCION";
@@ -134,6 +144,40 @@ const HERRAMIENTAS = [
           },
         },
         required: ["pitcher", "linea"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "proyectar_varios",
+      description:
+        "OBLIGATORIA cuando el usuario manda más de DOS lanzadores de una vez — una cartelera, una tabla, la foto de la pizarra del día. Proyecta hasta 40 en UNA sola llamada y devuelve la lista ya ordenada de mejor a peor contra la cuota. Usala SIEMPRE en ese caso: llamar a proyectar_ponches uno por uno agota el presupuesto de rondas y el usuario se queda sin respuesta. Las que traen veredicto REVISAR van al fondo y no se recomiendan, por más que su ganancia esperada sea la más alta: el campo 'revisar' dice qué no cierra. Después podés pedir proyectar_ponches del detalle de los pocos que se vayan a jugar.",
+      parameters: {
+        type: "object",
+        properties: {
+          juegos: {
+            type: "array",
+            description: "Un objeto por lanzador. Poné el rival: es lo que desambigua los apellidos repetidos.",
+            items: {
+              type: "object",
+              properties: {
+                pitcher: { type: "string", description: "Nombre del lanzador, aunque venga abreviado" },
+                linea: { type: "number", description: "Línea de ponches de la casa, ej. 6.5" },
+                rival: { type: "string", description: "Abreviación del equipo contrario, ej. NYY, CIN" },
+                mano: { type: "string", enum: ["RHP", "LHP"] },
+                ventana_rival: { type: "string", enum: ["TEMPORADA", "ULTIMOS_14"] },
+                cuota: { type: "number", description: "Solo si esta línea tiene una cuota distinta" },
+              },
+              required: ["pitcher", "linea"],
+            },
+          },
+          cuota: {
+            type: "number",
+            description: "Cuota americana para todas. Por defecto -130, la de Star Sport.",
+          },
+        },
+        required: ["juegos"],
       },
     },
   },
@@ -337,6 +381,16 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
       return data;
     }
 
+    case "proyectar_varios": {
+      const { data, error } = await supabase.rpc("proyectar_varios", {
+        p_juegos: args.juegos ?? [],
+        p_cuota: args.cuota ?? -130,
+        p_sistema: SISTEMA_ACTUAL,
+      });
+      if (error) return { error: error.message };
+      return data;
+    }
+
     case "buscar_pitcher": {
       const { data, error } = await supabase.rpc("buscar_pitcher", {
         texto_busqueda: args.nombre ?? "",
@@ -506,6 +560,8 @@ const SISTEMA = `Sos el analista de StrikeoutLab, la app personal de Gianlouis p
 CÓMO TRABAJÁS:
 - El usuario te manda fotos (tickets, boxscores, capturas de estadísticas) o te escribe. Vos hacés TODO: leés, buscás los datos, calculás y respondés. Nunca le pidas que llene campos ni que repita datos que ya están en la foto o en la base.
 - Para cualquier apuesta llamá SIEMPRE a "proyectar_ponches". Esa herramienta busca sola las estadísticas y devuelve los K proyectados, el lado y la confianza. Ese número es aritmética exacta: usalo tal cual, nunca lo recalcules ni lo ajustes de cabeza. Vos no sos bueno con números; la calculadora sí.
+- **Si te mandan más de dos lanzadores de una vez** —una cartelera, una tabla, la pizarra del día— usá "proyectar_varios" y metelos TODOS en UNA sola llamada. No los vayas proyectando de a uno: tenés un tope de rondas y se te acaba a mitad de camino, y él se queda sin respuesta habiendo mandado todo. En una tabla con dos equipos y dos lanzadores por fila, el primer lanzador es del primer equipo y el segundo del segundo; el rival de cada uno es el otro equipo de su fila. Poné siempre el rival: es lo que distingue dos lanzadores con el mismo apellido.
+- Lo que "proyectar_varios" devuelve con veredicto REVISAR NO se recomienda ni entra en un parlay, aunque tenga la ganancia esperada más alta de la lista. Justamente cuando un dato no cierra es cuando el número se ve mejor. Leé el campo "revisar", decilo en una línea y preguntá lo que haga falta para destrabarlo.
 - Si la foto es de un juego YA TERMINADO (boxscore con resultados), guardá esa salida con "guardar_salida" sin que te lo pidan, y después contá qué guardaste. Así se alimenta el historial real.
 - Si es un ticket o una línea de un juego que todavía no se juega, proyectá y dale tu recomendación.
 - Solo guardás un pick con "guardar_pick" si el usuario lo pide o confirma.
@@ -622,7 +678,7 @@ Deno.serve(async (req: Request) => {
 
   // Si un modelo falla o está saturado se pasa al siguiente, en vez de
   // dejar al usuario sin respuesta.
-  async function pedirAlModelo(): Promise<any> {
+  async function pedirAlModelo(conHerramientas = true): Promise<any> {
     let ultimoError = "";
     for (const modelo of MODELOS_RAZONAMIENTO) {
       try {
@@ -632,8 +688,9 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({
             model: modelo,
             messages: mensajes,
-            tools: HERRAMIENTAS,
-            tool_choice: "auto",
+            ...(conHerramientas
+              ? { tools: HERRAMIENTAS, tool_choice: "auto" }
+              : { tool_choice: "none" }),
             temperature: 0.3,
             max_tokens: 4000,
           }),
@@ -680,6 +737,27 @@ Deno.serve(async (req: Request) => {
 
       respuestaFinal = (mensaje.content ?? "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
       break;
+    }
+
+    // Si se acabaron las rondas, no se tira a la basura lo que ya se juntó:
+    // se pide una última respuesta con las herramientas apagadas, así el
+    // modelo tiene que contestar con los datos que tenga en la mano. Antes
+    // devolvía "me quedé dando vueltas" y perdía las proyecciones hechas.
+    if (!respuestaFinal) {
+      mensajes.push({
+        role: "user",
+        content:
+          "Se acabó el tiempo de buscar datos. Contestá ahora con lo que ya tenés, " +
+          "sin llamar más herramientas. Si te faltaron lanzadores, decí cuáles quedaron " +
+          "afuera y ofrecé seguir con esos.",
+      });
+      try {
+        const datos = await pedirAlModelo(false);
+        const mensaje = datos?.choices?.[0]?.message as NvidiaMensaje | undefined;
+        respuestaFinal = (mensaje?.content ?? "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+      } catch {
+        respuestaFinal = "";
+      }
     }
 
     if (!respuestaFinal) {
