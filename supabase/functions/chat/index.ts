@@ -17,14 +17,42 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
-// Visión: modelos rápidos de transcripción, en orden de preferencia. Se pasa
-// al siguiente si uno está saturado (503) — pasó en producción con el modelo
-// omni, que además tardaba 16s contra 4s del 90b.
+// Visión: modelos de transcripción, en orden de preferencia.
+//
+// El orden cambió después de medirlo de verdad. Antes iba primero el 90b y
+// era la causa de que mandar una foto "diera error": no fallaba, TARDABA.
+// Corridas con el mismo ticket, misma imagen:
+//
+//   llama-3.2-11b-vision   0.7s   1.5s   4.1s    <- estable
+//   nemotron-3-nano-omni   4.1s   5.3s           <- estable, y leyó bien
+//   llama-3.2-90b-vision   34s    4.6s   103s    <- impredecible
+//
+// Con el 90b primero, una transcripción se comía sola más tiempo del que
+// tiene la Edge Function para responder entera, y el usuario veía un error
+// sin saber por qué. El tamaño NO era el problema: la misma imagen inflada
+// a 935 KB devolvió 200 igual. Era la latencia.
+//
+// El omni va primero porque fue el único que leyó bien la línea las dos
+// veces; el 11b una vez leyó 8.5 donde decía 6.5. En una app donde el
+// número ES la apuesta, tres segundos valen menos que un dígito. El 11b
+// queda de respaldo rápido y el 90b último, por si los dos están caídos.
+//
+// Descartados con medición: gemma-4-31b no respondió en 45s, y gemma-3-12b
+// figura en el catálogo pero devuelve 404 para esta cuenta — estar listado
+// no alcanza, hay que probarlo.
 const MODELOS_VISION = (Deno.env.get("NVIDIA_MODELOS_VISION") ??
-  "meta/llama-3.2-90b-vision-instruct,meta/llama-3.2-11b-vision-instruct")
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,meta/llama-3.2-11b-vision-instruct,meta/llama-3.2-90b-vision-instruct")
   .split(",")
   .map((m) => m.trim())
   .filter(Boolean);
+
+/**
+ * Cuánto se le aguanta a un modelo de visión antes de pasar al siguiente.
+ * Existe porque el modo de falla real no fue un error sino la demora: sin
+ * este corte, un modelo lento se lleva puesto el presupuesto de toda la
+ * respuesta y no queda tiempo ni para contestar.
+ */
+const TOPE_MS_VISION = 25000;
 
 // Razonamiento con tool-calling, en orden de preferencia. Medido contra el
 // catálogo real de la cuenta:
@@ -73,9 +101,12 @@ async function transcribirImagen(
 ): Promise<{ texto: string; modelo: string }> {
   let ultimoError = "";
   for (const modelo of MODELOS_VISION) {
+    const corte = new AbortController();
+    const reloj = setTimeout(() => corte.abort(), TOPE_MS_VISION);
     try {
       const resp = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
         method: "POST",
+        signal: corte.signal,
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           model: modelo,
@@ -103,11 +134,20 @@ async function transcribirImagen(
       }
 
       const datos = await resp.json();
-      const texto = datos?.choices?.[0]?.message?.content;
-      if (typeof texto === "string" && texto.trim()) return { texto: texto.trim(), modelo };
+      // El omni es un modelo de razonamiento: puede devolver el bloque de
+      // pensamiento pegado a la transcripción. Si eso entra al hilo, la IA
+      // lo lee como si fueran datos del ticket.
+      const texto = (datos?.choices?.[0]?.message?.content ?? "")
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .trim();
+      if (texto) return { texto, modelo };
       ultimoError = `${modelo} devolvió una respuesta vacía`;
     } catch (e) {
-      ultimoError = `${modelo}: ${(e as Error).message}`;
+      ultimoError = corte.signal.aborted
+        ? `${modelo} pasó de ${TOPE_MS_VISION / 1000}s y se cortó`
+        : `${modelo}: ${(e as Error).message}`;
+    } finally {
+      clearTimeout(reloj);
     }
   }
   throw new Error(
@@ -132,7 +172,12 @@ const HERRAMIENTAS = [
           pitcher: { type: "string", description: "Nombre del lanzador, aunque venga abreviado" },
           linea: { type: "number", description: "Línea de ponches de la casa, ej. 6.5" },
           rival: { type: "string", description: "Abreviación del equipo rival, ej. NYY, CIN" },
-          mano_pitcher: { type: "string", enum: ["RHP", "LHP"], description: "Mano del lanzador si se sabe" },
+          mano_pitcher: {
+            type: "string",
+            enum: ["RHP", "LHP"],
+            description:
+              "NO lo pases y NO lo busques: la calculadora ya sabe con qué mano lanza cada uno y usa la mano guardada. Si mandás una y no coincide, la ignora y te avisa.",
+          },
           ventana_rival: {
             type: "string",
             enum: ["TEMPORADA", "ULTIMOS_14"],
@@ -165,7 +210,11 @@ const HERRAMIENTAS = [
                 pitcher: { type: "string", description: "Nombre del lanzador, aunque venga abreviado" },
                 linea: { type: "number", description: "Línea de ponches de la casa, ej. 6.5" },
                 rival: { type: "string", description: "Abreviación del equipo contrario, ej. NYY, CIN" },
-                mano: { type: "string", enum: ["RHP", "LHP"] },
+                mano: {
+                  type: "string",
+                  enum: ["RHP", "LHP"],
+                  description: "No lo pases: la calculadora usa la mano guardada.",
+                },
                 ventana_rival: { type: "string", enum: ["TEMPORADA", "ULTIMOS_14"] },
                 cuota: { type: "number", description: "Solo si esta línea tiene una cuota distinta" },
               },
@@ -567,6 +616,7 @@ CÓMO TRABAJÁS:
 - Solo guardás un pick con "guardar_pick" si el usuario lo pide o confirma.
 - "proyectar_ponches" YA TRAE el veredicto contra la cuota adentro, en el campo "apuesta": ahí están CONVIENE/FLOJO/NO CONVIENE, la ganancia por peso y cuánto arriesgar. NO llames a "evaluar_apuesta" después de proyectar — el número ya está hecho y con las probabilidades correctas. Usá "evaluar_apuesta" solo si el usuario te tira una probabilidad suelta que no salió de una proyección.
 - Si el ticket tiene una cuota distinta de -130, volvé a llamar a "proyectar_ponches" pasándole esa cuota, no calcules aparte.
+- NUNCA busques ni adivines con qué mano lanza alguien, y NUNCA pases "mano_pitcher". La base ya la tiene para 823 lanzadores y la calculadora la usa sola. Esto es una regla dura porque ya pasó: buscaste en la web la mano de Cam Schlittler, no la sacaste, pasaste LHP para un DERECHO, y salió una proyección coherente con la mano equivocada. Un dato de entrada falso no se ve en la tarjeta.
 - Para cualquier combinada, llamá a "evaluar_parlay". Nunca multipliques confianzas de cabeza ni digas "las dos al 85% dan 85%".
 
 CÓMO RESPONDÉS:
@@ -574,6 +624,7 @@ CÓMO RESPONDÉS:
 - Al citar la confianza usá SIEMPRE "confianza_calibrada", no "confianza". La cruda es la que declara el modelo antes de descontarle lo que su historial dice que vale; la calibrada es la que se juega. Si las dos difieren mucho, decilo en una línea.
 - El campo "nivel" (DIAMANTE/ORO/IMPUREZA) sale del valor esperado, así que siempre concuerda con el veredicto. Si citás uno, no contradigas el otro.
 - Después, en pocas líneas, el porqué: K% del lanzador, cómo batea el rival, cuántos innings suele durar.
+- Cuando digas de dónde salió un número, copiá lo que dicen "fuente_k_rival" y "entradas_usadas", no lo cuentes de memoria. Si "fuente_k_rival" dice "K% general de BOS", NO digas "el split contra zurdos": eso es inventar de dónde salió el dato, y es tan grave como inventar el dato.
 - Si la calculadora devuelve advertencias (muestra chica, empate probable, nombre ambiguo, faltan datos), decilas. No las escondas.
 - Cuando "ajuste_por_muestra" muestre que el K% ajustado quedó lejos del crudo, citá SIEMPRE el ajustado y explicá por qué en una línea: con pocos bateadores enfrentados el número crudo es suerte, no habilidad. Nunca digas el K% crudo como si fuera la tasa real del lanzador.
 - Si algo no se puede saber, decilo claro. Nunca inventes una estadística ni un lineup.

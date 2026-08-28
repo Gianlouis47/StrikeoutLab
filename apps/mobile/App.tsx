@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@supabase/supabase-js";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, SafeAreaView, Text, View } from "react-native";
 import { Boton, colores, estilos } from "./components/ui";
 import { confirmarAccion } from "./lib/confirmacion";
@@ -40,10 +40,39 @@ type PestanaId =
   | (typeof PESTANAS_PRINCIPALES)[number]["id"]
   | (typeof PESTANAS_SECUNDARIAS)[number]["id"];
 
+/**
+ * Una pantalla que se esconde en vez de desmontarse.
+ *
+ * Antes esto era `{pestana === "chat" && <ChatScreen />}`, y ahí está el
+ * "se borra todo": al cambiar de pestaña React desmonta el componente y con
+ * él se van el useState, lo que estabas escribiendo y la conversación
+ * entera. Volver no la recupera porque no quedó nada que recuperar.
+ *
+ * Con `display: "none"` la pantalla sigue montada y conserva su estado, pero
+ * no ocupa lugar ni se dibuja. `visitada` es para no montar las ocho de
+ * entrada: cada una carga sus datos al montarse, y arrancar la app pidiendo
+ * ocho consultas a la vez la haría lenta justo al abrirla.
+ */
+function Pestana({
+  activa,
+  visitada,
+  children,
+}: {
+  activa: boolean;
+  visitada: boolean;
+  children: React.ReactNode;
+}) {
+  if (!visitada) return null;
+  return <View style={{ flex: 1, display: activa ? "flex" : "none" }}>{children}</View>;
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [cargandoSesion, setCargandoSesion] = useState(true);
   const [pestana, setPestana] = useState<PestanaId>("chat");
+  // Qué pantallas ya se abrieron alguna vez. Una vez montadas se quedan
+  // montadas, para que no pierdan lo que tienen escrito o cargado.
+  const [visitadas, setVisitadas] = useState<Set<PestanaId>>(() => new Set<PestanaId>(["chat"]));
   const [menuAbierto, setMenuAbierto] = useState(false);
   const [borrador, setBorrador] = useState<BorradorPick | null>(null);
   // El teclado se maneja acá arriba y no adentro de cada pantalla: así la
@@ -61,9 +90,14 @@ export default function App() {
     return () => suscripcion.subscription.unsubscribe();
   }, []);
 
+  const irA = useCallback((id: PestanaId) => {
+    setPestana(id);
+    setVisitadas((previas) => (previas.has(id) ? previas : new Set(previas).add(id)));
+  }, []);
+
   function usarDatosDeFoto(datos: DatosExtraidosFoto) {
     setBorrador((prev) => ({ datos, version: (prev?.version ?? 0) + 1 }));
-    setPestana("nuevoPick");
+    irA("nuevoPick");
   }
 
   if (cargandoSesion) {
@@ -94,14 +128,30 @@ export default function App() {
       onLayout={teclado.onLayout}
     >
       <View style={{ flex: 1 }}>
-        {pestana === "chat" && <ChatScreen />}
-        {pestana === "dashboard" && <DashboardScreen />}
-        {pestana === "nuevoPick" && <NuevaPickScreen borrador={borrador} />}
-        {pestana === "foto" && <AnalizarFotoScreen onUsarDatos={usarDatosDeFoto} />}
-        {pestana === "salida" && <RegistrarSalidaScreen />}
-        {pestana === "historial" && <HistorialScreen />}
-        {pestana === "rivales" && <RivalesScreen />}
-        {pestana === "parlay" && <ParlayScreen />}
+        <Pestana activa={pestana === "chat"} visitada={visitadas.has("chat")}>
+          <ChatScreen />
+        </Pestana>
+        <Pestana activa={pestana === "dashboard"} visitada={visitadas.has("dashboard")}>
+          <DashboardScreen />
+        </Pestana>
+        <Pestana activa={pestana === "nuevoPick"} visitada={visitadas.has("nuevoPick")}>
+          <NuevaPickScreen borrador={borrador} />
+        </Pestana>
+        <Pestana activa={pestana === "foto"} visitada={visitadas.has("foto")}>
+          <AnalizarFotoScreen onUsarDatos={usarDatosDeFoto} />
+        </Pestana>
+        <Pestana activa={pestana === "salida"} visitada={visitadas.has("salida")}>
+          <RegistrarSalidaScreen />
+        </Pestana>
+        <Pestana activa={pestana === "historial"} visitada={visitadas.has("historial")}>
+          <HistorialScreen />
+        </Pestana>
+        <Pestana activa={pestana === "rivales"} visitada={visitadas.has("rivales")}>
+          <RivalesScreen />
+        </Pestana>
+        <Pestana activa={pestana === "parlay"} visitada={visitadas.has("parlay")}>
+          <ParlayScreen />
+        </Pestana>
       </View>
 
       {menuAbierto && (
@@ -117,7 +167,7 @@ export default function App() {
             <Pressable
               key={p.id}
               onPress={() => {
-                setPestana(p.id);
+                irA(p.id);
                 setMenuAbierto(false);
               }}
               style={{
@@ -191,7 +241,7 @@ export default function App() {
                 if (esMenu) {
                   setMenuAbierto((v) => !v);
                 } else {
-                  setPestana(p.id as PestanaId);
+                  irA(p.id as PestanaId);
                   setMenuAbierto(false);
                 }
               }}

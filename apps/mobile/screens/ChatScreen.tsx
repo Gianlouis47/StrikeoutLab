@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as ImagePicker from "expo-image-picker";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -15,7 +14,14 @@ import {
 } from "react-native";
 import { Barra, Boton, Insignia, Mensaje, colores, estilos } from "../components/ui";
 import { SISTEMA_ACTUAL, type Proyeccion } from "../lib/calculadora";
+import { confirmarAccion } from "../lib/confirmacion";
+import {
+  borrarConversacion,
+  cargarConversacion,
+  guardarConversacion,
+} from "../lib/conversacion";
 import { chat, type MensajeChat } from "../lib/edgeFunctions";
+import { borrarImagenesGuardadas, elegirImagen, type ImagenLista } from "../lib/imagen";
 import { repositorio } from "../lib/supabase-repository";
 
 interface Burbuja {
@@ -68,17 +74,56 @@ const SUGERENCIAS = [
 export default function ChatScreen() {
   const [burbujas, setBurbujas] = useState<Burbuja[]>([]);
   const [entrada, setEntrada] = useState("");
-  const [imagenPendiente, setImagenPendiente] = useState<
-    { base64: string; mimeType: string; uri: string } | null
-  >(null);
+  const [imagenPendiente, setImagenPendiente] = useState<ImagenLista | null>(null);
   const [pensando, setPensando] = useState(false);
   const [guardandoPick, setGuardandoPick] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Hasta que no se leyó lo guardado no se puede escribir encima, o el
+  // primer guardado (con la lista vacía) borra la conversación anterior.
+  const [restaurada, setRestaurada] = useState(false);
   const listaRef = useRef<FlatList<Burbuja>>(null);
 
   const irAlFinal = useCallback(() => {
     setTimeout(() => listaRef.current?.scrollToEnd({ animated: true }), 60);
   }, []);
+
+  // Al abrir la app se recupera la conversación y hasta lo que había quedado
+  // escrito sin enviar.
+  useEffect(() => {
+    let vivo = true;
+    cargarConversacion().then(({ burbujas: guardadas, borrador }) => {
+      if (!vivo) return;
+      if (guardadas.length > 0) setBurbujas(guardadas);
+      if (borrador) setEntrada(borrador);
+      setRestaurada(true);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  // Se guarda con un respiro para no escribir en disco en cada tecla.
+  useEffect(() => {
+    if (!restaurada) return;
+    const reloj = setTimeout(() => void guardarConversacion(burbujas, entrada), 400);
+    return () => clearTimeout(reloj);
+  }, [burbujas, entrada, restaurada]);
+
+  function limpiar() {
+    confirmarAccion({
+      titulo: "¿Borrar la conversación?",
+      mensaje: "Se va todo el hilo y las fotos que mandaste. Los picks que guardaste quedan.",
+      tituloBotonConfirmar: "Borrar",
+      onConfirmar: () => {
+        setBurbujas([]);
+        setEntrada("");
+        setImagenPendiente(null);
+        setError(null);
+        void borrarConversacion();
+        borrarImagenesGuardadas();
+      },
+    });
+  }
 
   // Al abrir el teclado la lista se achica y el último mensaje se va para
   // arriba. Volver al final deja a la vista lo que se estaba leyendo.
@@ -92,32 +137,14 @@ export default function ChatScreen() {
 
   async function adjuntar(desdeCamara: boolean) {
     setError(null);
-    const permiso = desdeCamara
-      ? await ImagePicker.requestCameraPermissionsAsync()
-      : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permiso.granted) {
-      setError(
-        desdeCamara
-          ? "Necesito permiso de cámara para tomar la foto."
-          : "Necesito permiso de galería para elegir la imagen.",
-      );
-      return;
+    try {
+      // Achica y guarda en un solo paso: lo que viaja pesa decenas de KB en
+      // vez de megas, y el archivo queda donde Android no lo borra.
+      const imagen = await elegirImagen(desdeCamara);
+      if (imagen) setImagenPendiente(imagen);
+    } catch (e) {
+      setError((e as Error).message);
     }
-    const opciones: ImagePicker.ImagePickerOptions = { base64: true, quality: 0.6 };
-    const resultado = desdeCamara
-      ? await ImagePicker.launchCameraAsync(opciones)
-      : await ImagePicker.launchImageLibraryAsync(opciones);
-    if (resultado.canceled) return;
-    const asset = resultado.assets[0];
-    if (!asset.base64) {
-      setError("No pude leer esa imagen, probá con otra.");
-      return;
-    }
-    setImagenPendiente({
-      base64: asset.base64,
-      mimeType: asset.mimeType ?? "image/jpeg",
-      uri: asset.uri,
-    });
   }
 
   async function enviar() {
@@ -420,6 +447,29 @@ export default function ChatScreen() {
       enabled={Platform.OS === "ios"}
       keyboardVerticalOffset={8}
     >
+      {burbujas.length > 0 && (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            borderBottomWidth: 1,
+            borderBottomColor: colores.borde,
+            backgroundColor: colores.tarjeta,
+          }}
+        >
+          <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+            {burbujas.length} mensaje{burbujas.length === 1 ? "" : "s"} · se guarda solo
+          </Text>
+          <Pressable onPress={limpiar} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+            <Ionicons name="trash-outline" size={15} color={colores.textoSuave} />
+            <Text style={{ color: colores.textoSuave, fontSize: 12 }}>Borrar</Text>
+          </Pressable>
+        </View>
+      )}
+
       <FlatList
         ref={listaRef}
         style={estilos.pantalla}
