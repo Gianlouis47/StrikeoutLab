@@ -19,8 +19,11 @@ export interface StatsUsadas {
 export interface Proyeccion {
   encontrado: true;
   pitcher: string;
+  /** Equipo del lanzador. Null si cambió de equipo esta temporada. */
+  equipo: string | null;
   linea: number;
   rival: string;
+  mano_pitcher: "RHP" | "LHP" | null;
   fuente_k_rival: string;
   k_proyectados: number;
   bateadores_esperados: number;

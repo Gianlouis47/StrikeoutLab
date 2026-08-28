@@ -33,3 +33,13 @@
 --
 -- 3. buscar_pitcher y proyectar_ponches tenían search_path mutable (vía
 --    para secuestro de esquema). Fijado a public, pg_catalog.
+
+-- Agregado después: columna `equipo` en pitcher_stats_snapshot y en el JSON
+-- que devuelve proyectar_ponches. Sin eso, un pick armado por la IA quedaba
+-- incompleto y había que escribir el equipo a mano, que es justo lo que el
+-- flujo de chat evita.
+--
+-- Se carga desde el roster activo del MLB Stats API (currentTeam), no desde
+-- las stats de temporada: un lanzador que cambió de equipo aparece ahí como
+-- "2 Tms" sin equipo concreto, y para apostar hoy importa dónde juega hoy.
+-- Con currentTeam quedan 823 de 825 con equipo, contra 725 usando stats.

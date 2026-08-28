@@ -12,8 +12,10 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Mensaje, colores, estilos } from "../components/ui";
+import { Barra, Boton, Insignia, Mensaje, colores, estilos } from "../components/ui";
+import type { Proyeccion } from "../lib/calculadora";
 import { chat, type MensajeChat } from "../lib/edgeFunctions";
+import { repositorio } from "../lib/supabase-repository";
 
 interface Burbuja {
   id: string;
@@ -22,6 +24,38 @@ interface Burbuja {
   uriImagen?: string;
   /** Qué hizo la IA por dentro, para poder auditar de dónde salió el número. */
   detalle?: string[];
+  /** Pick ya armado por la calculadora, listo para guardar de un toque. */
+  pick?: Proyeccion;
+  /** id del pick en la base una vez guardado, para no duplicarlo. */
+  pickGuardadoId?: string;
+}
+
+/**
+ * Saca del detalle de herramientas la última proyección que hizo la
+ * calculadora. Así el usuario recibe el pick armado en vez de tener que
+ * copiar los números a otra pantalla.
+ */
+function extraerPick(herramientas: Array<{ nombre: string; resultado: unknown }>): Proyeccion | undefined {
+  for (let i = herramientas.length - 1; i >= 0; i--) {
+    const h = herramientas[i];
+    if (h.nombre !== "proyectar_ponches") continue;
+    const r = h.resultado as Proyeccion | { encontrado: false } | null;
+    if (r && typeof r === "object" && "encontrado" in r && r.encontrado) return r as Proyeccion;
+  }
+  return undefined;
+}
+
+/**
+ * Si el usuario ya pidió por escrito que lo guardara, la IA lo guardó con su
+ * propia herramienta. Detectarlo evita ofrecer el botón y terminar con el
+ * mismo pick dos veces en el historial.
+ */
+function yaLoGuardoLaIA(herramientas: Array<{ nombre: string; resultado: unknown }>): boolean {
+  return herramientas.some((h) => {
+    if (h.nombre !== "guardar_pick") return false;
+    const r = h.resultado as { guardado?: boolean } | null;
+    return !!r && typeof r === "object" && r.guardado === true;
+  });
 }
 
 const SUGERENCIAS = [
@@ -37,6 +71,7 @@ export default function ChatScreen() {
     { base64: string; mimeType: string; uri: string } | null
   >(null);
   const [pensando, setPensando] = useState(false);
+  const [guardandoPick, setGuardandoPick] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const listaRef = useRef<FlatList<Burbuja>>(null);
 
@@ -114,9 +149,17 @@ export default function ChatScreen() {
       for (const h of r.herramientasUsadas ?? []) {
         detalle.push(`Usó ${h.nombre}`);
       }
+      const herramientas = r.herramientasUsadas ?? [];
       setBurbujas((prev) => [
         ...prev,
-        { id: `a-${Date.now()}`, rol: "asistente", texto: r.respuesta, detalle },
+        {
+          id: `a-${Date.now()}`,
+          rol: "asistente",
+          texto: r.respuesta,
+          detalle,
+          pick: extraerPick(herramientas),
+          pickGuardadoId: yaLoGuardoLaIA(herramientas) ? "guardado-por-la-ia" : undefined,
+        },
       ]);
     } catch (e) {
       setError((e as Error).message);
@@ -126,13 +169,130 @@ export default function ChatScreen() {
     }
   }
 
+  async function guardarPick(burbuja: Burbuja) {
+    const p = burbuja.pick;
+    if (!p || !p.veredicto) return;
+    setGuardandoPick(burbuja.id);
+    setError(null);
+    try {
+      const fila = await repositorio.crear<{ id: string }>("picks", {
+        fecha: new Date().toISOString().slice(0, 10),
+        pitcher: p.pitcher,
+        equipo: (p.equipo ?? "").toUpperCase(),
+        rival: (p.rival ?? "").toUpperCase(),
+        linea: p.linea,
+        pick: p.veredicto,
+        confianza: p.confianza,
+        nivel: p.nivel,
+        // Sale de estadísticas de temporada, no de contar salidas reales.
+        fuente_confianza: "JUICIO",
+        motivo: `${p.k_proyectados} K proyectados vs línea ${p.linea}. ${p.entradas_usadas.join(", ")}.`,
+      });
+      setBurbujas((prev) =>
+        prev.map((b) => (b.id === burbuja.id ? { ...b, pickGuardadoId: fila.id } : b)),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGuardandoPick(null);
+    }
+  }
+
+  /** El pick ya armado: nada que escribir, solo confirmar. */
+  function TarjetaPick({ burbuja }: { burbuja: Burbuja }) {
+    const p = burbuja.pick!;
+    const guardado = !!burbuja.pickGuardadoId;
+    const faltaEquipo = !p.equipo;
+    const colorLado = p.veredicto === "OVER" ? colores.exito : colores.advertencia;
+
+    return (
+      <View
+        style={{
+          marginTop: 8,
+          backgroundColor: colores.tarjetaElevada,
+          borderRadius: 14,
+          borderWidth: 1,
+          borderColor: guardado ? colores.exito + "55" : colores.acento + "55",
+          padding: 14,
+          gap: 10,
+        }}
+      >
+        <View style={estilos.filaEntreEspacio}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colores.texto, fontWeight: "700", fontSize: 15 }} numberOfLines={1}>
+              {p.pitcher}
+            </Text>
+            <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
+              {p.equipo ?? "—"} vs {p.rival || "—"}
+            </Text>
+          </View>
+          <View style={{ alignItems: "flex-end" }}>
+            <Text style={{ color: colores.texto, fontSize: 22, fontWeight: "800" }}>{p.k_proyectados}</Text>
+            <Text style={{ color: colores.textoSuave, fontSize: 10 }}>K proyectados</Text>
+          </View>
+        </View>
+
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            paddingVertical: 9,
+            backgroundColor: colores.fondo,
+            borderRadius: 10,
+          }}
+        >
+          <Text style={{ color: colorLado, fontSize: 18, fontWeight: "800" }}>
+            {p.veredicto ?? "SIN VENTAJA"}
+          </Text>
+          <Text style={{ color: colores.texto, fontSize: 17, fontWeight: "700" }}>{p.linea}</Text>
+          <Text style={{ color: colores.textoSuave, fontSize: 14 }}>
+            {(p.confianza * 100).toFixed(0)}%
+          </Text>
+          <Insignia texto={p.nivel.replace("_", " ")} tono="acento" />
+        </View>
+
+        <Barra
+          proporcion={p.confianza}
+          tono={p.confianza >= 0.85 ? "exito" : p.confianza >= 0.8 ? "advertencia" : "peligro"}
+          alto={5}
+        />
+
+        {faltaEquipo && !guardado && (
+          <Text style={{ color: colores.advertencia, fontSize: 12 }}>
+            No sé en qué equipo juega (cambió de equipo esta temporada). Decímelo y lo guardo.
+          </Text>
+        )}
+
+        {guardado ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 7, justifyContent: "center" }}>
+            <Ionicons name="checkmark-circle" size={17} color={colores.exito} />
+            <Text style={{ color: colores.exito, fontSize: 13, fontWeight: "600" }}>
+              Guardado en Historial
+            </Text>
+          </View>
+        ) : (
+          <Boton
+            titulo="Guardar este pick"
+            onPress={() => guardarPick(burbuja)}
+            cargando={guardandoPick === burbuja.id}
+            deshabilitado={!p.veredicto || faltaEquipo}
+          />
+        )}
+      </View>
+    );
+  }
+
   function renderBurbuja({ item }: { item: Burbuja }) {
     const esUsuario = item.rol === "usuario";
     return (
       <View
         style={{
           alignSelf: esUsuario ? "flex-end" : "flex-start",
-          maxWidth: "88%",
+          // El pick armado necesita más ancho que una burbuja de texto.
+          maxWidth: item.pick ? "100%" : "88%",
+          width: item.pick ? "100%" : undefined,
           marginBottom: 10,
         }}
       >
@@ -165,6 +325,9 @@ export default function ChatScreen() {
             {item.texto}
           </Text>
         </View>
+
+        {item.pick && <TarjetaPick burbuja={item} />}
+
         {item.detalle && item.detalle.length > 0 && (
           <Text style={{ color: colores.textoSuave, fontSize: 11, marginTop: 4, marginLeft: 6 }}>
             {item.detalle.join(" · ")}
