@@ -27,6 +27,18 @@ export const UMBRAL_FLOJO = 0.05;
 /** Terminar con menos de esto es "te fundiste". */
 export const UMBRAL_RUINA = 0.2;
 
+/**
+ * Debajo de esto no hay ventaja, hay ruido de coma flotante.
+ *
+ * Justo en el punto de equilibrio el cálculo deja un residuo de 1e-17, que no
+ * es margen. Postgres usa `numeric` y da 0 exacto; acá hace falta el epsilon.
+ * Lo comparten `evaluarApuesta` y `nivelDesdeValorEsperado` a propósito: si
+ * cada uno usara su propio umbral, entre los dos quedaría una franja donde el
+ * veredicto dice NO CONVIENE y el nivel dice ORO — que es exactamente la
+ * contradicción que el nivel derivado vino a eliminar.
+ */
+export const EPSILON_SIN_VENTAJA = 1e-9;
+
 export type VeredictoApuesta = "CONVIENE" | "FLOJO" | "NO CONVIENE";
 
 /**
@@ -91,10 +103,7 @@ export function evaluarApuesta(
   const pct = (x: number) => (x * 100).toFixed(1);
   let veredicto: VeredictoApuesta;
   let explicacion: string;
-  // Justo en el punto de equilibrio la coma flotante deja una ventaja de
-  // 1e-17, que no es ventaja. Postgres usa `numeric` y da 0 exacto; el
-  // epsilon hace que las dos implementaciones digan lo mismo.
-  if (valorEsperado <= 1e-9) {
+  if (valorEsperado <= EPSILON_SIN_VENTAJA) {
     veredicto = "NO CONVIENE";
     explicacion =
       `Al ${cuotaAmericana} hay que acertar ${pct(equilibrio)}% para no perder plata, y esto da ` +

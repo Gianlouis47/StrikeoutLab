@@ -52,8 +52,19 @@ export interface Proyeccion {
   prob_under: number;
   prob_empate: number;
   veredicto: "OVER" | "UNDER" | null;
+  /** Confianza cruda del modelo, sin calibrar. Se conserva para auditar. */
   confianza: number;
+  /** La que se usa de verdad: comprimida por el historial del sistema. */
+  confianza_calibrada: number;
+  /**
+   * Si conviene contra la cuota. Viene adentro de la proyección a propósito:
+   * cuando se calculaba afuera, la pantalla y la IA podían pasarle
+   * probabilidades distintas y llegar a veredictos distintos con el mismo pick.
+   */
+  apuesta: EvaluacionApuesta;
+  /** Derivado del valor esperado: nunca contradice a `apuesta.veredicto`. */
   nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
+  calibracion: Calibracion;
   stats_usadas: StatsUsadas;
   ajuste_por_muestra: AjustePorMuestra;
   entradas_usadas: string[];
@@ -79,6 +90,8 @@ export async function proyectarPonches(params: {
   rival?: string;
   manoPitcher?: "RHP" | "LHP";
   ventanaRival?: "TEMPORADA" | "ULTIMOS_14";
+  cuota?: number;
+  sistema?: Sistema;
 }): Promise<ResultadoProyeccion> {
   const { data, error } = await supabase.rpc("proyectar_ponches", {
     p_pitcher: params.pitcher,
@@ -86,6 +99,8 @@ export async function proyectarPonches(params: {
     p_rival: params.rival || null,
     p_mano: params.manoPitcher ?? null,
     p_ventana_rival: params.ventanaRival ?? "TEMPORADA",
+    p_cuota: params.cuota ?? CUOTA_POR_DEFECTO,
+    p_sistema: params.sistema ?? SISTEMA_ACTUAL,
   });
   if (error) throw new Error(error.message);
   if (!data) throw new Error("La calculadora no devolvió resultado.");

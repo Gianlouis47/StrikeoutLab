@@ -115,7 +115,7 @@ const HERRAMIENTAS = [
     function: {
       name: "proyectar_ponches",
       description:
-        "LA HERRAMIENTA PRINCIPAL. Dado un lanzador, su rival y la línea de la casa, busca sola todas las estadísticas y devuelve los ponches proyectados, el lado que conviene (OVER/UNDER) y la confianza. Es aritmética exacta: usá SIEMPRE su número tal cual, nunca calcules vos.",
+        "LA HERRAMIENTA PRINCIPAL, y la única que hace falta para una apuesta. Dado un lanzador, su rival y la línea, busca sola todas las estadísticas y devuelve: los ponches proyectados, el lado (OVER/UNDER), la confianza cruda y la calibrada, el nivel, y en el campo 'apuesta' el veredicto contra la cuota ya hecho (CONVIENE/FLOJO/NO CONVIENE, ganancia por peso, cuánto arriesgar). NO hace falta llamar a evaluar_apuesta después. Es aritmética exacta: usá sus números tal cual, nunca calcules vos.",
       parameters: {
         type: "object",
         properties: {
@@ -127,6 +127,10 @@ const HERRAMIENTAS = [
             type: "string",
             enum: ["TEMPORADA", "ULTIMOS_14"],
             description: "Qué ventana usar para el rival. ULTIMOS_14 refleja su forma reciente.",
+          },
+          cuota: {
+            type: "number",
+            description: "Cuota americana de la casa. Por defecto -130, la de Star Sport. Pasala si el ticket dice otra.",
           },
         },
         required: ["pitcher", "linea"],
@@ -326,6 +330,8 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
         p_rival: args.rival ?? null,
         p_mano: args.mano_pitcher ?? null,
         p_ventana_rival: args.ventana_rival ?? "TEMPORADA",
+        p_cuota: args.cuota ?? -130,
+        p_sistema: SISTEMA_ACTUAL,
       });
       if (error) return { error: error.message };
       return data;
@@ -503,11 +509,14 @@ CÓMO TRABAJÁS:
 - Si la foto es de un juego YA TERMINADO (boxscore con resultados), guardá esa salida con "guardar_salida" sin que te lo pidan, y después contá qué guardaste. Así se alimenta el historial real.
 - Si es un ticket o una línea de un juego que todavía no se juega, proyectá y dale tu recomendación.
 - Solo guardás un pick con "guardar_pick" si el usuario lo pide o confirma.
-- Después de proyectar, llamá SIEMPRE a "evaluar_apuesta" con esa confianza y la cuota (-130 salvo que el ticket diga otra). La probabilidad sola no decide nada: lo que decide es si le gana a la cuota.
+- "proyectar_ponches" YA TRAE el veredicto contra la cuota adentro, en el campo "apuesta": ahí están CONVIENE/FLOJO/NO CONVIENE, la ganancia por peso y cuánto arriesgar. NO llames a "evaluar_apuesta" después de proyectar — el número ya está hecho y con las probabilidades correctas. Usá "evaluar_apuesta" solo si el usuario te tira una probabilidad suelta que no salió de una proyección.
+- Si el ticket tiene una cuota distinta de -130, volvé a llamar a "proyectar_ponches" pasándole esa cuota, no calcules aparte.
 - Para cualquier combinada, llamá a "evaluar_parlay". Nunca multipliques confianzas de cabeza ni digas "las dos al 85% dan 85%".
 
 CÓMO RESPONDÉS:
-- Empezá por el resultado, no por el proceso: "deGrom vs CIN, línea 7: proyecta 7.9 K → OVER, 62%. Al -130 eso CONVIENE: 9.7 centavos de ganancia por peso."
+- Empezá por el resultado, no por el proceso: "deGrom vs CIN, línea 7: proyecta 7.9 K → OVER. Al -130 eso CONVIENE: 9.7 centavos de ganancia por peso."
+- Al citar la confianza usá SIEMPRE "confianza_calibrada", no "confianza". La cruda es la que declara el modelo antes de descontarle lo que su historial dice que vale; la calibrada es la que se juega. Si las dos difieren mucho, decilo en una línea.
+- El campo "nivel" (DIAMANTE/ORO/IMPUREZA) sale del valor esperado, así que siempre concuerda con el veredicto. Si citás uno, no contradigas el otro.
 - Después, en pocas líneas, el porqué: K% del lanzador, cómo batea el rival, cuántos innings suele durar.
 - Si la calculadora devuelve advertencias (muestra chica, empate probable, nombre ambiguo, faltan datos), decilas. No las escondas.
 - Cuando "ajuste_por_muestra" muestre que el K% ajustado quedó lejos del crudo, citá SIEMPRE el ajustado y explicá por qué en una línea: con pocos bateadores enfrentados el número crudo es suerte, no habilidad. Nunca digas el K% crudo como si fuera la tasa real del lanzador.

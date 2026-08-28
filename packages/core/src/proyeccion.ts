@@ -43,6 +43,8 @@
  */
 
 import type { PickTipo } from "./calculations.js";
+import type { Nivel } from "./calibration.js";
+import { evaluarApuesta, EPSILON_SIN_VENTAJA, type EvaluacionApuesta } from "./apuesta.js";
 
 /** K% promedio de MLB moderna. Solo se usa si no se pasa el real. */
 export const LIGA_K_PCT_POR_DEFECTO = 22.1;
@@ -117,6 +119,32 @@ export function regresarALaMedia(
   return (observado * n + ancla * estabilizacion) / (n + estabilizacion);
 }
 
+/**
+ * El nivel sale del valor esperado, no de la confianza suelta.
+ *
+ * Antes eran bandas de confianza (≥95% DIAMANTE_ALTO, ≥80% ORO...) calibradas
+ * al puntuador viejo, que declaraba 76-90%. La calculadora nueva vive entre
+ * 50% y 79% porque regresa a la media, así que casi todo caía en IMPUREZA —
+ * medido sobre 120 abridores reales, 106 quedaban IMPUREZA y de esos 65 tenían
+ * veredicto CONVIENE. La tarjeta mostraba las dos cosas juntas.
+ *
+ * Peor: el nivel no conocía la cuota. Un 79% era IMPUREZA y un 81% ORO, cuando
+ * los dos le ganan holgado al 56.5% que pide el -130.
+ *
+ * Derivándolo del valor esperado no puede contradecir al veredicto: son el
+ * mismo número en dos granularidades. Y mide plata, que es lo que importa.
+ */
+export function nivelDesdeValorEsperado(valorEsperado: number): Nivel {
+  // El mismo umbral que usa `evaluarApuesta` para decir NO CONVIENE. Si acá
+  // fuera `<= 0`, entre 0 y 1e-9 el veredicto diría NO CONVIENE y el nivel
+  // ORO: la contradicción que este diseño vino a eliminar.
+  if (valorEsperado <= EPSILON_SIN_VENTAJA) return "IMPUREZA";
+  if (valorEsperado <= 0.05) return "ORO";
+  if (valorEsperado <= 0.15) return "ORO_ALTO";
+  if (valorEsperado <= 0.3) return "DIAMANTE";
+  return "DIAMANTE_ALTO";
+}
+
 export interface EntradaProyeccion {
   /** Línea de la casa (ej. 6.5, o 7 para línea entera con empate posible). */
   linea: number;
@@ -149,6 +177,16 @@ export interface EntradaProyeccion {
   esAbridor?: boolean;
   /** WHIP real de la liga. Si falta, usa el default. */
   ligaWhip?: number;
+  /** Cuota de la casa, para evaluar si conviene. -130 en Star Sport. */
+  cuotaAmericana?: number;
+  /**
+   * Cuánto vale la confianza declarada según el historial del sistema
+   * (`calcularCalibracion`). Se aplica igual que en el parlay: la calibración
+   * dice lo que vale la confianza, y vale lo mismo se juegue sola o
+   * acompañada. Sin esto, la apuesta simple y el parlay usaban estándares
+   * distintos y el mismo pick daba CONVIENE solo y FLOJO en combinada.
+   */
+  factorCalibracion?: number;
 }
 
 /** Cuánto se movió cada stat al regresarla a la media, para poder auditarlo. */
@@ -187,6 +225,12 @@ export interface ResultadoProyeccion {
    * se deciden (excluye el empate, que devuelve la plata).
    */
   confianza: number;
+  /** La confianza después de aplicar la calibración real del sistema. */
+  confianzaCalibrada: number;
+  /** Si conviene contra la cuota. Calculado sobre la confianza calibrada. */
+  apuesta: EvaluacionApuesta;
+  /** Derivado del valor esperado: nunca contradice a `apuesta.veredicto`. */
+  nivel: Nivel;
   /** Cómo quedó cada stat después de regresarla a la media. */
   ajustePorMuestra: AjustePorMuestra;
   /** Qué datos se usaron de verdad, para poder auditar el número. */
@@ -393,6 +437,35 @@ export function proyectarPonches(entrada: EntradaProyeccion): ResultadoProyeccio
     confianza = probUnderNorm;
   }
 
+  // --- De confianza a decisión: calibrar y evaluar contra la cuota ---
+  // La calibración se aplica acá, no en quien llame, porque hacerlo afuera
+  // dejaba que la apuesta simple usara el número crudo mientras el parlay lo
+  // comprimía: el mismo pick daba CONVIENE solo y FLOJO en combinada.
+  const factorCalibracion = entrada.factorCalibracion ?? 1;
+  const confianzaCalibrada = Math.min(
+    0.99,
+    Math.max(0.01, 0.5 + (confianza - 0.5) * factorCalibracion),
+  );
+
+  // `confianza` está normalizada sobre las apuestas que se deciden (excluye
+  // el empate), así que hay que volver a incondicional antes de evaluar. Si no,
+  // pasarla junto a probEmpate cuenta el empate dos veces y en línea entera
+  // puede dar vuelta el veredicto.
+  const apuesta = evaluarApuesta(
+    confianzaCalibrada * (1 - probEmpate),
+    entrada.cuotaAmericana ?? -130,
+    probEmpate,
+  );
+  const nivel = nivelDesdeValorEsperado(apuesta.valorEsperado);
+
+  if (Math.abs(confianza - confianzaCalibrada) >= 0.03) {
+    advertencias.push(
+      `La confianza cruda es ${(confianza * 100).toFixed(1)}% pero se juega como ` +
+        `${(confianzaCalibrada * 100).toFixed(1)}%: el sistema todavía no demostró que su ` +
+        `confianza valga lo que dice.`,
+    );
+  }
+
   if (supuestos.length >= 3) {
     advertencias.push(
       `La proyección se apoya en ${supuestos.length} supuestos por falta de datos reales — tomala como orientativa, no como número firme.`,
@@ -418,6 +491,9 @@ export function proyectarPonches(entrada: EntradaProyeccion): ResultadoProyeccio
     probEmpate,
     veredicto,
     confianza,
+    confianzaCalibrada,
+    apuesta,
+    nivel,
     ajustePorMuestra,
     entradasUsadas,
     supuestos,

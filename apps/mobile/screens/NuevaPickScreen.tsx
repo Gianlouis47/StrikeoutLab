@@ -14,13 +14,7 @@ import {
   colores,
   estilos,
 } from "../components/ui";
-import {
-  evaluarApuesta,
-  proyectarPonches,
-  SISTEMA_ACTUAL,
-  type EvaluacionApuesta,
-  type Proyeccion,
-} from "../lib/calculadora";
+import { proyectarPonches, SISTEMA_ACTUAL, type Proyeccion } from "../lib/calculadora";
 import type { DatosExtraidosFoto } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
 import { pickNuevoSchema } from "../lib/validators";
@@ -35,12 +29,16 @@ const ETIQUETA_NIVEL: Record<Nivel, string> = {
   ORO: "Oro",
   IMPUREZA: "Impureza",
 };
+// El nivel ya no son bandas de confianza sino de ganancia esperada por peso
+// apostado. Antes decía "95-100%" y esas bandas venían del puntuador viejo,
+// que declaraba 76-90%: con la calculadora nueva (50-79%) casi todo caía en
+// IMPUREZA aunque fuera buen pick.
 const RANGO_NIVEL: Record<Nivel, string> = {
-  DIAMANTE_ALTO: "95-100%",
-  DIAMANTE: "90-94%",
-  ORO_ALTO: "85-89%",
-  ORO: "80-84%",
-  IMPUREZA: "79% o menos",
+  DIAMANTE_ALTO: "más de 30¢ por peso",
+  DIAMANTE: "15-30¢ por peso",
+  ORO_ALTO: "5-15¢ por peso",
+  ORO: "hasta 5¢ por peso",
+  IMPUREZA: "no le gana a la cuota",
 };
 
 export interface BorradorPick {
@@ -97,7 +95,6 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   const [opcionesAbiertas, setOpcionesAbiertas] = useState(false);
   const [calculando, setCalculando] = useState(false);
   const [proyeccion, setProyeccion] = useState<Proyeccion | null>(null);
-  const [evaluacion, setEvaluacion] = useState<EvaluacionApuesta | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -132,18 +129,16 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       });
       if (!r.encontrado) {
         setProyeccion(null);
-        setEvaluacion(null);
         setError(r.mensaje);
         return;
       }
       setProyeccion(r);
       // La calculadora manda: se prellenan confianza, nivel y hasta el lado.
-      setConfianza((r.confianza * 100).toFixed(0));
+      // La confianza que se guarda es la calibrada — la cruda solo sirve para
+      // auditar cuánto la movió el historial del sistema.
+      setConfianza((r.confianza_calibrada * 100).toFixed(0));
       setNivel(r.nivel);
       if (r.veredicto) setPick(r.veredicto);
-      // Y aparte, si contra la cuota conviene o no: la probabilidad sola no
-      // decide nada.
-      setEvaluacion(await evaluarApuesta({ probabilidad: r.confianza, probEmpate: r.prob_empate }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -201,7 +196,6 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
       setCodigo("");
       setConfianza("");
       setProyeccion(null);
-      setEvaluacion(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -358,7 +352,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
 
           {/* Antes de las estadísticas: si contra la cuota conviene o no. Esa
               es la pregunta, no cuál es la probabilidad. */}
-          {evaluacion && (
+          {proyeccion.apuesta && (
             <View
               style={{
                 borderTopWidth: 1,
@@ -372,23 +366,23 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
                 <Text
                   style={{
                     color:
-                      evaluacion.veredicto === "CONVIENE"
+                      proyeccion.apuesta.veredicto === "CONVIENE"
                         ? colores.exito
-                        : evaluacion.veredicto === "FLOJO"
+                        : proyeccion.apuesta.veredicto === "FLOJO"
                           ? colores.advertencia
                           : colores.peligro,
                     fontSize: 17,
                     fontWeight: "800",
                   }}
                 >
-                  {evaluacion.veredicto}
+                  {proyeccion.apuesta.veredicto}
                 </Text>
                 <Text style={{ color: colores.textoSuave, fontSize: 12 }}>
-                  al {evaluacion.cuota_americana} · pide {(evaluacion.prob_de_equilibrio * 100).toFixed(1)}%
+                  al {proyeccion.apuesta.cuota_americana} · pide {(proyeccion.apuesta.prob_de_equilibrio * 100).toFixed(1)}%
                 </Text>
               </View>
               <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 18 }}>
-                {evaluacion.explicacion}
+                {proyeccion.apuesta.explicacion}
               </Text>
             </View>
           )}

@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { Barra, Boton, Insignia, Mensaje, colores, estilos } from "../components/ui";
-import { SISTEMA_ACTUAL, type EvaluacionApuesta, type Proyeccion } from "../lib/calculadora";
+import { SISTEMA_ACTUAL, type Proyeccion } from "../lib/calculadora";
 import { chat, type MensajeChat } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
 
@@ -26,8 +26,6 @@ interface Burbuja {
   detalle?: string[];
   /** Pick ya armado por la calculadora, listo para guardar de un toque. */
   pick?: Proyeccion;
-  /** Si conviene o no contra la cuota. La probabilidad sola no decide nada. */
-  evaluacion?: EvaluacionApuesta;
   /** id del pick en la base una vez guardado, para no duplicarlo. */
   pickGuardadoId?: string;
 }
@@ -43,22 +41,6 @@ function extraerPick(herramientas: Array<{ nombre: string; resultado: unknown }>
     if (h.nombre !== "proyectar_ponches") continue;
     const r = h.resultado as Proyeccion | { encontrado: false } | null;
     if (r && typeof r === "object" && "encontrado" in r && r.encontrado) return r as Proyeccion;
-  }
-  return undefined;
-}
-
-/**
- * Saca la evaluación contra la cuota. La IA la pide siempre después de
- * proyectar, así que no hace falta una segunda llamada desde acá.
- */
-function extraerEvaluacion(
-  herramientas: Array<{ nombre: string; resultado: unknown }>,
-): EvaluacionApuesta | undefined {
-  for (let i = herramientas.length - 1; i >= 0; i--) {
-    const h = herramientas[i];
-    if (h.nombre !== "evaluar_apuesta") continue;
-    const r = h.resultado as EvaluacionApuesta | { error: string } | null;
-    if (r && typeof r === "object" && "veredicto" in r) return r as EvaluacionApuesta;
   }
   return undefined;
 }
@@ -176,7 +158,6 @@ export default function ChatScreen() {
           texto: r.respuesta,
           detalle,
           pick: extraerPick(herramientas),
-          evaluacion: extraerEvaluacion(herramientas),
           pickGuardadoId: yaLoGuardoLaIA(herramientas) ? "guardado-por-la-ia" : undefined,
         },
       ]);
@@ -201,7 +182,9 @@ export default function ChatScreen() {
         rival: (p.rival ?? "").toUpperCase(),
         linea: p.linea,
         pick: p.veredicto,
-        confianza: p.confianza,
+        // La calibrada, no la cruda: es la que la app mostró y la que se va a
+        // medir después contra el resultado real.
+        confianza: p.confianza_calibrada,
         nivel: p.nivel,
         // Sale de estadísticas de temporada, no de contar salidas reales.
         fuente_confianza: "JUICIO",
@@ -227,11 +210,13 @@ export default function ChatScreen() {
     const ajusteVisible =
       p.ajuste_por_muestra?.k_pct_crudo != null &&
       Math.abs(p.ajuste_por_muestra.k_pct_ajustado - p.ajuste_por_muestra.k_pct_crudo) >= 1.5;
-    const ev = burbuja.evaluacion;
+    // Sale de la MISMA proyección que el resto de la tarjeta, así que el
+    // veredicto, el nivel y la confianza no pueden contradecirse entre sí.
+    const ev = p.apuesta;
     const colorVeredicto =
-      ev?.veredicto === "CONVIENE"
+      ev.veredicto === "CONVIENE"
         ? colores.exito
-        : ev?.veredicto === "FLOJO"
+        : ev.veredicto === "FLOJO"
           ? colores.advertencia
           : colores.peligro;
 
@@ -278,20 +263,27 @@ export default function ChatScreen() {
           </Text>
           <Text style={{ color: colores.texto, fontSize: 17, fontWeight: "700" }}>{p.linea}</Text>
           <Text style={{ color: colores.textoSuave, fontSize: 14 }}>
-            {(p.confianza * 100).toFixed(0)}%
+            {(p.confianza_calibrada * 100).toFixed(0)}%
           </Text>
-          <Insignia texto={p.nivel.replace("_", " ")} tono="acento" />
+          <Insignia
+            texto={p.nivel.replace("_", " ")}
+            tono={
+              ev.veredicto === "CONVIENE" ? "exito" : ev.veredicto === "FLOJO" ? "advertencia" : "peligro"
+            }
+          />
         </View>
 
         <Barra
-          proporcion={p.confianza}
-          tono={p.confianza >= 0.85 ? "exito" : p.confianza >= 0.8 ? "advertencia" : "peligro"}
+          proporcion={p.confianza_calibrada}
+          tono={
+            ev.veredicto === "CONVIENE" ? "exito" : ev.veredicto === "FLOJO" ? "advertencia" : "peligro"
+          }
           alto={5}
         />
 
         {/* La probabilidad sola no decide nada: al -130 hace falta 56.5% solo
             para no perder plata. Esto es lo que responde "¿la juego?". */}
-        {ev && (
+        {(
           <View
             style={{
               borderTopWidth: 1,

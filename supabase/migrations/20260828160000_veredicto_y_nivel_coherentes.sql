@@ -1,0 +1,86 @@
+-- Migración aplicada el 2026-08-28. El veredicto deja de armarse afuera de la
+-- calculadora, y con eso mueren tres incoherencias que tenían la misma raíz.
+--
+-- ============================================================
+-- 1. LA TARJETA SE CONTRADECÍA SOLA
+-- ============================================================
+--
+-- El nivel (DIAMANTE/ORO/IMPUREZA) eran bandas de confianza calibradas al
+-- puntuador viejo, que declaraba 76-90%. La calculadora nueva vive entre 50% y
+-- 79% porque regresa a la media, así que casi todo caía en IMPUREZA.
+--
+-- Medido sobre 120 abridores reales: 106 quedaban IMPUREZA, y de esos 65
+-- tenían veredicto CONVIENE. La tarjeta mostraba "CONVIENE" en verde y
+-- "IMPUREZA" al lado, en el mismo pick.
+--
+-- Peor de fondo: el nivel no conocía la cuota. Un 79% era IMPUREZA y un 81%
+-- ORO, cuando los dos le ganan holgado al 56.5% que pide el -130.
+--
+-- ============================================================
+-- 2. LA APUESTA SIMPLE Y EL PARLAY USABAN ESTÁNDARES DISTINTOS
+-- ============================================================
+--
+-- evaluar_parlay comprimía la confianza por la calibración real del sistema;
+-- la apuesta simple usaba el número crudo. El mismo pick de Skubal daba
+-- CONVIENE jugado solo y FLOJO dentro de una combinada.
+--
+-- No hay razón para eso. La calibración dice cuánto vale la confianza
+-- declarada, y vale lo mismo se juegue sola o acompañada.
+--
+-- ============================================================
+-- 3. EN LÍNEA ENTERA SE CONTABA EL EMPATE DOS VECES
+-- ============================================================
+--
+-- `confianza` está normalizada sobre las apuestas que se deciden (excluye el
+-- empate, que devuelve la plata). Pasarla como probabilidad de ganar Y además
+-- pasar prob_empate lo cuenta dos veces. Con deGrom línea 7 la diferencia daba
+-- vuelta el veredicto — y la IA elegía distinto según el caso: en una prueba
+-- pasó prob_over y en otra la confianza. Quien llamaba decidía el resultado.
+--
+-- ============================================================
+-- LA SOLUCIÓN: QUE NO SE PUEDA ARMAR MAL
+-- ============================================================
+--
+-- proyectar_ponches recibe la cuota, aplica la calibración del sistema, arma
+-- las tres probabilidades incondicionales que sí suman 1, y devuelve la
+-- evaluación adentro, en el campo `apuesta`. Quien llame ya no elige qué
+-- probabilidad pasar ni tiene que acordarse de calibrar.
+--
+--   ganar   = confianza_calibrada × (1 − empate)
+--   perder  = (1 − confianza_calibrada) × (1 − empate)
+--   empate  = como estaba                        → los tres suman 1
+--
+-- Y el nivel se deriva del valor esperado, así que no puede contradecir al
+-- veredicto: son el mismo número en dos granularidades. Verificado sobre 150
+-- abridores, el mapeo es 1 a 1 (IMPUREZA↔NO CONVIENE, ORO↔FLOJO,
+-- ORO_ALTO/DIAMANTE↔CONVIENE).
+--
+--   IMPUREZA       valor esperado ≤ 0        no le gana a la cuota
+--   ORO            hasta 5 centavos por peso gana, dentro del error del modelo
+--   ORO_ALTO       hasta 15
+--   DIAMANTE       hasta 30
+--   DIAMANTE_ALTO  más de 30
+--
+-- Con la calibración en 0.35, DIAMANTE_ALTO es inalcanzable a propósito: ni
+-- una confianza del 100% declarado llega a 30 centavos por peso después de
+-- comprimir. Se vuelve alcanzable cuando el sistema demuestre que su confianza
+-- vale más, cargando resultados.
+--
+-- ============================================================
+-- EFECTO SOBRE CASOS REALES
+-- ============================================================
+--
+--   Skubal 6.5   71.5% cruda → 57.5% calibrada   ORO / FLOJO  (+1.8¢)
+--   deGrom 7     54.4% → 51.5%                   IMPUREZA / NO CONVIENE (−7.5¢)
+--   Eflin 5.5    83.9% → 61.9%                   ORO_ALTO / CONVIENE (+9.4¢)
+--
+-- La app se volvió bastante más conservadora: de 120 abridores, antes 65
+-- decían CONVIENE con la confianza cruda; ahora 27. Es la lectura honesta
+-- mientras el sistema no tenga historial propio.
+--
+-- ============================================================
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro. La copia en TypeScript, con tests que recorren el rango de valor
+-- esperado comprobando que nivel y veredicto nunca se contradigan, está en
+-- packages/core/src/proyeccion.ts.

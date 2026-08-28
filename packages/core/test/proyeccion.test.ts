@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ESTABILIZACION, log5, proyectarPonches, regresarALaMedia } from "../src/proyeccion.js";
+import { evaluarParlay } from "../src/apuesta.js";
+import type { Nivel } from "../src/calibration.js";
+import {
+  ESTABILIZACION,
+  log5,
+  nivelDesdeValorEsperado,
+  proyectarPonches,
+  regresarALaMedia,
+} from "../src/proyeccion.js";
 
 /**
  * Temporada completa: con esta muestra la regresión a la media casi no
@@ -246,5 +254,95 @@ describe("proyectarPonches — regresión a la media", () => {
     expect(abridor.ajustePorMuestra.ipPorSalidaAjustado).toBeGreaterThan(
       relevista.ajustePorMuestra.ipPorSalidaAjustado,
     );
+  });
+});
+
+describe("nivel y veredicto no pueden contradecirse", () => {
+  it("cada nivel corresponde a un solo veredicto", () => {
+    // El bug que motivó esto: el nivel salía de bandas de confianza calibradas
+    // al puntuador viejo (76-90%) mientras la calculadora nueva vive en 50-79%.
+    // Medido sobre 120 abridores reales, 65 picks mostraban CONVIENE e
+    // IMPUREZA juntos en la misma tarjeta.
+    const esperado: Record<Nivel, string> = {
+      IMPUREZA: "NO CONVIENE",
+      ORO: "FLOJO",
+      ORO_ALTO: "CONVIENE",
+      DIAMANTE: "CONVIENE",
+      DIAMANTE_ALTO: "CONVIENE",
+    };
+    for (let ev = -0.5; ev <= 1; ev += 0.01) {
+      const nivel = nivelDesdeValorEsperado(ev);
+      const veredicto = ev <= 1e-9 ? "NO CONVIENE" : ev <= 0.05 ? "FLOJO" : "CONVIENE";
+      expect(esperado[nivel]).toBe(veredicto);
+    }
+  });
+
+  it("el nivel sube con el valor esperado, nunca baja", () => {
+    const orden: Nivel[] = ["IMPUREZA", "ORO", "ORO_ALTO", "DIAMANTE", "DIAMANTE_ALTO"];
+    let previo = -1;
+    for (let ev = -0.2; ev <= 0.6; ev += 0.01) {
+      const indice = orden.indexOf(nivelDesdeValorEsperado(ev));
+      expect(indice).toBeGreaterThanOrEqual(previo);
+      previo = indice;
+    }
+  });
+});
+
+describe("proyectarPonches — calibración y cuota", () => {
+  const SKUBAL = {
+    linea: 6.5, kPctPitcher: 30.9, whipPitcher: 0.95, ipPorSalida: 6.03,
+    ipTotales: 120.6, salidas: 20, whiffPctPitcher: 32.3, kPctRival: 24.9, ligaKPct: 22.1,
+  } as const;
+
+  it("sin factor de calibración la confianza no se toca", () => {
+    const r = proyectarPonches(SKUBAL);
+    expect(r.confianzaCalibrada).toBeCloseTo(r.confianza, 6);
+  });
+
+  it("con el factor sin historial, la confianza se comprime hacia el 50%", () => {
+    const r = proyectarPonches({ ...SKUBAL, factorCalibracion: 0.35 });
+    expect(r.confianzaCalibrada).toBeLessThan(r.confianza);
+    expect(r.confianzaCalibrada).toBeCloseTo(0.5 + (r.confianza - 0.5) * 0.35, 6);
+  });
+
+  it("la apuesta simple usa el mismo estándar que el parlay", () => {
+    // Este era el bug: el parlay comprimía por calibración y la apuesta simple
+    // usaba el número crudo, así que el mismo pick daba CONVIENE solo y FLOJO
+    // en combinada.
+    const r = proyectarPonches({ ...SKUBAL, factorCalibracion: 0.35 });
+    const comoEnElParlay = evaluarParlay([r.confianza], { factorCalibracion: 0.35 });
+    expect(r.confianzaCalibrada).toBeCloseTo(comoEnElParlay.probabilidadesHonestas[0]!, 6);
+  });
+
+  it("en línea entera el empate no se cuenta dos veces", () => {
+    const r = proyectarPonches({ ...SKUBAL, linea: 7, factorCalibracion: 0.35 });
+    expect(r.probEmpate).toBeGreaterThan(0);
+    // Las tres probabilidades de la apuesta tienen que sumar 1: si se pasara
+    // la confianza condicional como si fuera incondicional, no sumarían.
+    const suma = r.apuesta.probGanar + r.apuesta.probPerder + r.apuesta.probEmpate;
+    expect(suma).toBeCloseTo(1, 9);
+  });
+
+  it("el nivel devuelto coincide con el veredicto de su propia apuesta", () => {
+    for (const kPct of [15, 20, 25, 30, 35]) {
+      for (const factor of [0.25, 0.35, 1]) {
+        const r = proyectarPonches({ ...SKUBAL, kPctPitcher: kPct, factorCalibracion: factor });
+        expect(r.nivel).toBe(nivelDesdeValorEsperado(r.apuesta.valorEsperado));
+        if (r.apuesta.veredicto === "NO CONVIENE") expect(r.nivel).toBe("IMPUREZA");
+        if (r.apuesta.veredicto === "CONVIENE") expect(r.nivel).not.toBe("IMPUREZA");
+      }
+    }
+  });
+
+  it("una cuota peor empeora el veredicto con la misma proyección", () => {
+    const bueno = proyectarPonches({ ...SKUBAL, cuotaAmericana: -110 });
+    const malo = proyectarPonches({ ...SKUBAL, cuotaAmericana: -200 });
+    expect(bueno.kProyectados).toBeCloseTo(malo.kProyectados, 6);
+    expect(bueno.apuesta.valorEsperado).toBeGreaterThan(malo.apuesta.valorEsperado);
+  });
+
+  it("avisa cuando la calibración movió el número de forma relevante", () => {
+    const r = proyectarPonches({ ...SKUBAL, factorCalibracion: 0.35 });
+    expect(r.advertencias.join(" ")).toContain("se juega como");
   });
 });
