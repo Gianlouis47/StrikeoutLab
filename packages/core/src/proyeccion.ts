@@ -26,18 +26,85 @@
  *    Poisson (la varianza real es un poco mayor), así que las probabilidades
  *    extremas quedan algo optimistas — por eso `advertencias` lo dice cuando
  *    la probabilidad supera 90%.
+ *
+ * 4. **Regresión a la media (Bayes empírico)** sobre las stats del lanzador.
+ *    Un relevista con 2 bateadores enfrentados y 1 K tiene 50% de K%, y eso
+ *    no es una tasa: es ruido. Cada stat se empuja hacia un ancla en
+ *    proporción a lo poco que sabemos:
+ *
+ *      estimado = (observado × muestra + ancla × K) / (muestra + K)
+ *
+ *    donde K es la constante de estabilización — el tamaño de muestra al que
+ *    la mitad de lo observado ya es señal real.
+ *
+ * Esta es la copia en TypeScript de la función `proyectar_ponches` de
+ * Postgres, que es la que usa la app. Las dos tienen que dar el mismo
+ * número: si tocás una, tocá la otra.
  */
 
 import type { PickTipo } from "./calculations.js";
 
 /** K% promedio de MLB moderna. Solo se usa si no se pasa el real. */
-export const LIGA_K_PCT_POR_DEFECTO = 22.5;
+export const LIGA_K_PCT_POR_DEFECTO = 22.1;
 
-/** Innings por salida de un abridor típico, si no hay historial real. */
-export const IP_POR_SALIDA_POR_DEFECTO = 5.2;
+/**
+ * Cuánto dura una salida real de abridor: IP totales / salidas totales, no
+ * el promedio por lanzador. La diferencia importa — el promedio simple
+ * mezcla al abridor de 30 aperturas con el emergente de una y da 4.95 en vez
+ * de 5.17.
+ */
+export const IP_POR_SALIDA_POR_DEFECTO = 5.17;
 
-/** WHIP de liga, usado solo para estimar bateadores enfrentados. */
-export const LIGA_WHIP_POR_DEFECTO = 1.28;
+/** Innings por aparición de un relevista típico, con el mismo criterio. */
+export const IP_POR_APARICION_RELEVO = 1.2;
+
+/** WHIP de liga (ponderado por IP), para estimar bateadores enfrentados. */
+export const LIGA_WHIP_POR_DEFECTO = 1.3;
+
+/**
+ * Constantes de estabilización: a cuántos bateadores enfrentados (o salidas)
+ * la mitad de lo observado ya es habilidad y no suerte. Son las medidas
+ * clásicas de sabermetría — el K% estabiliza rápido, el WHIP lentísimo
+ * porque arrastra el BABIP.
+ */
+export const ESTABILIZACION = {
+  /** K%, en bateadores enfrentados. */
+  kPct: 70,
+  /** WHIP, en bateadores enfrentados: estabiliza lento porque arrastra el BABIP. */
+  whip: 500,
+  /**
+   * Duración de la salida, en salidas. Medido sobre nuestros propios datos
+   * descomponiendo la varianza: Var(observado) = Var(verdadera) + σ²/n da
+   * σ = 1.51 IP por salida (que coincide con el valor conocido de MLB) y
+   * Var(verdadera) ≈ 0.38, o sea K = 1.51² / 0.38 ≈ 6.
+   */
+  ipPorSalida: 6,
+} as const;
+
+/**
+ * Recta SwStr% → K% medida sobre nuestros propios datos (55 lanzadores,
+ * R² = 0.75). Sirve como ancla mejor que el promedio de liga: el
+ * swing-and-miss explica tres cuartas partes de la varianza del K% y
+ * estabiliza en cientos de lanzamientos, no de bateadores.
+ *
+ * En Postgres esto se recalcula en cada llamada con `regr_slope`, así que
+ * mejora solo a medida que cargamos datos. Acá quedan los valores medidos.
+ */
+export const RECTA_SWSTR_A_K = { pendiente: 2.0887, intercepto: 0.1239, r2: 0.7501 } as const;
+
+/**
+ * Empuja un valor observado hacia el ancla según el tamaño de la muestra.
+ * Con muestra 0 devuelve el ancla; con muestra infinita, lo observado.
+ */
+export function regresarALaMedia(
+  observado: number,
+  muestra: number,
+  ancla: number,
+  estabilizacion: number,
+): number {
+  const n = Math.max(0, muestra);
+  return (observado * n + ancla * estabilizacion) / (n + estabilizacion);
+}
 
 export interface EntradaProyeccion {
   /** Línea de la casa (ej. 6.5, o 7 para línea entera con empate posible). */
@@ -54,6 +121,37 @@ export interface EntradaProyeccion {
   kPctRival?: number;
   /** K% real de la liga, calculado de team_k. Si falta, usa el default. */
   ligaKPct?: number;
+  /**
+   * Innings totales lanzados en la temporada. De acá sale el tamaño de
+   * muestra (BF ≈ IP × (3 + WHIP)) que decide cuánto se le cree a las
+   * stats. Sin esto no hay regresión a la media y un 50% de K% con dos
+   * bateadores enfrentados se toma como si fuera real.
+   */
+  ipTotales?: number;
+  /** Salidas de la temporada — la muestra de `ipPorSalida`. */
+  salidas?: number;
+  /** SwStr% del lanzador: si está, es mejor ancla que el promedio de liga. */
+  swstrPctPitcher?: number;
+  /** Falso para relevistas: cambia el ancla de duración de la salida. */
+  esAbridor?: boolean;
+  /** WHIP real de la liga. Si falta, usa el default. */
+  ligaWhip?: number;
+}
+
+/** Cuánto se movió cada stat al regresarla a la media, para poder auditarlo. */
+export interface AjustePorMuestra {
+  /** Tamaño de muestra en bateadores enfrentados. */
+  bateadoresDeMuestra: number;
+  /** Cuánto pesa lo observado frente al ancla, 0-1. */
+  pesoDeLoObservado: number;
+  kPctCrudo: number | null;
+  kPctAjustado: number;
+  whipCrudo: number | null;
+  whipAjustado: number;
+  ipPorSalidaCrudo: number | null;
+  ipPorSalidaAjustado: number;
+  /** De dónde salió el ancla del K%, en palabras. */
+  anclaUsada: string;
 }
 
 export interface ResultadoProyeccion {
@@ -76,6 +174,8 @@ export interface ResultadoProyeccion {
    * se deciden (excluye el empate, que devuelve la plata).
    */
   confianza: number;
+  /** Cómo quedó cada stat después de regresarla a la media. */
+  ajustePorMuestra: AjustePorMuestra;
   /** Qué datos se usaron de verdad, para poder auditar el número. */
   entradasUsadas: string[];
   /** Qué faltó y con qué se sustituyó. */
@@ -124,22 +224,75 @@ export function proyectarPonches(entrada: EntradaProyeccion): ResultadoProyeccio
     supuestos.push(`K% de liga asumido en ${ligaKPct}% (no se pasó el real)`);
   }
 
-  // --- Tasa de ponche del pitcher ---
-  let kPctPitcher: number;
+  const ligaWhip = entrada.ligaWhip ?? LIGA_WHIP_POR_DEFECTO;
+
+  // --- Tamaño de muestra: BF ≈ IP × (3 + WHIP) ---
+  // Los 3 son los outs por inning; el WHIP agrega los corredores que permite.
+  const whipCrudo = entrada.whipPitcher ?? null;
+  const bateadoresDeMuestra = (entrada.ipTotales ?? 0) * (3 + (whipCrudo ?? ligaWhip));
+
+  // --- Tasa de ponche observada ---
+  let kPctCrudo: number | null;
   if (entrada.kPctPitcher !== undefined) {
-    kPctPitcher = entrada.kPctPitcher;
-    entradasUsadas.push(`K% del pitcher (${kPctPitcher.toFixed(1)}%)`);
+    kPctCrudo = entrada.kPctPitcher;
+    entradasUsadas.push(
+      `K% del pitcher (${kPctCrudo.toFixed(1)}% en ${Math.round(bateadoresDeMuestra)} BF)`,
+    );
   } else if (entrada.k9Pitcher !== undefined) {
     // K/9 → K%: un inning son ~4.3 bateadores en promedio de liga.
-    kPctPitcher = (entrada.k9Pitcher / (9 * 4.3)) * 100;
-    entradasUsadas.push(`K/9 del pitcher (${entrada.k9Pitcher}, convertido a ${kPctPitcher.toFixed(1)}% K)`);
+    kPctCrudo = (entrada.k9Pitcher / (9 * 4.3)) * 100;
+    entradasUsadas.push(`K/9 del pitcher (${entrada.k9Pitcher}, convertido a ${kPctCrudo.toFixed(1)}% K)`);
     supuestos.push("K% derivado de K/9 — menos preciso que el K% directo");
   } else {
-    kPctPitcher = ligaKPct;
-    supuestos.push(`Sin K% ni K/9 del pitcher: se usó el promedio de liga (${ligaKPct}%)`);
-    advertencias.push(
-      "Sin la tasa de ponche del pitcher esta proyección no significa gran cosa — es prácticamente el promedio de la liga.",
-    );
+    // Sin nada observado la muestra es cero, así que el estimado queda
+    // entero en el ancla.
+    kPctCrudo = null;
+    supuestos.push("Sin K% ni K/9 del pitcher");
+  }
+
+  // --- Ancla del K%: SwStr% si lo hay, si no el promedio de liga ---
+  let anclaKPct: number;
+  let anclaUsada: string;
+  if (entrada.swstrPctPitcher !== undefined) {
+    const predicho = RECTA_SWSTR_A_K.pendiente * entrada.swstrPctPitcher + RECTA_SWSTR_A_K.intercepto;
+    anclaKPct = Math.min(45, Math.max(3, predicho));
+    anclaUsada = `SwStr% ${entrada.swstrPctPitcher.toFixed(1)}% → ${anclaKPct.toFixed(1)}% K esperado (R²=${RECTA_SWSTR_A_K.r2.toFixed(2)})`;
+    entradasUsadas.push(`SwStr% (${entrada.swstrPctPitcher.toFixed(1)}%) como ancla`);
+  } else {
+    anclaKPct = ligaKPct;
+    anclaUsada = `promedio de liga (${ligaKPct.toFixed(1)}%)`;
+  }
+
+  // --- Regresión a la media ---
+  const muestraK = kPctCrudo === null ? 0 : bateadoresDeMuestra;
+  const kPctPitcher = regresarALaMedia(kPctCrudo ?? anclaKPct, muestraK, anclaKPct, ESTABILIZACION.kPct);
+
+  const whip = regresarALaMedia(
+    whipCrudo ?? ligaWhip,
+    whipCrudo === null ? 0 : bateadoresDeMuestra,
+    ligaWhip,
+    ESTABILIZACION.whip,
+  );
+  if (whipCrudo !== null) {
+    entradasUsadas.push(`WHIP (${whipCrudo.toFixed(2)})`);
+  } else {
+    supuestos.push(`WHIP asumido en ${ligaWhip} (promedio de liga)`);
+  }
+
+  // `ipPorSalida` viene en decimal (IP totales / salidas), no en notación de
+  // béisbol: 183.67 IP en 28 salidas son 6.56, no 6 y 2/3.
+  const anclaIp = entrada.esAbridor === false ? IP_POR_APARICION_RELEVO : IP_POR_SALIDA_POR_DEFECTO;
+  const ipCrudo = entrada.ipPorSalida ?? null;
+  const ipPorSalida = regresarALaMedia(
+    ipCrudo ?? anclaIp,
+    ipCrudo === null ? 0 : (entrada.salidas ?? 0),
+    anclaIp,
+    ESTABILIZACION.ipPorSalida,
+  );
+  if (ipCrudo !== null) {
+    entradasUsadas.push(`IP promedio por salida (${ipCrudo.toFixed(2)} en ${entrada.salidas ?? 0} salidas)`);
+  } else {
+    supuestos.push(`Duración de salida asumida en ${anclaIp} IP (sin historial real)`);
   }
 
   // --- Tasa de ponche del rival bateando ---
@@ -155,29 +308,32 @@ export function proyectarPonches(entrada: EntradaProyeccion): ResultadoProyeccio
   // --- Combinación log5 ---
   const kPctCombinado = log5(kPctPitcher / 100, kPctRival / 100, ligaKPct / 100) * 100;
 
-  // --- Cuántos bateadores va a enfrentar ---
-  const ipPorSalida = entrada.ipPorSalida ?? IP_POR_SALIDA_POR_DEFECTO;
-  if (entrada.ipPorSalida !== undefined) {
-    entradasUsadas.push(`IP promedio por salida (${ipPorSalida.toFixed(1)})`);
-  } else {
-    supuestos.push(`Duración de salida asumida en ${IP_POR_SALIDA_POR_DEFECTO} IP (sin historial real)`);
-  }
-
-  const whip = entrada.whipPitcher ?? LIGA_WHIP_POR_DEFECTO;
-  if (entrada.whipPitcher !== undefined) {
-    entradasUsadas.push(`WHIP (${whip.toFixed(2)})`);
-  } else {
-    supuestos.push(`WHIP asumido en ${LIGA_WHIP_POR_DEFECTO} (promedio de liga)`);
-  }
-
-  // IP viene en notación de béisbol (6.2 = 6 innings y 2/3), hay que pasarla
-  // a decimal real antes de multiplicar.
-  const ipEnteros = Math.floor(ipPorSalida);
-  const tercios = Math.round((ipPorSalida - ipEnteros) * 10);
-  const ipDecimal = ipEnteros + Math.min(tercios, 2) / 3;
-
-  const bateadoresEsperados = ipDecimal * (3 + whip);
+  const bateadoresEsperados = ipPorSalida * (3 + whip);
   const kProyectados = bateadoresEsperados * (kPctCombinado / 100);
+
+  const ajustePorMuestra: AjustePorMuestra = {
+    bateadoresDeMuestra,
+    pesoDeLoObservado: muestraK / (muestraK + ESTABILIZACION.kPct),
+    kPctCrudo,
+    kPctAjustado: kPctPitcher,
+    whipCrudo,
+    whipAjustado: whip,
+    ipPorSalidaCrudo: ipCrudo,
+    ipPorSalidaAjustado: ipPorSalida,
+    anclaUsada,
+  };
+
+  if (kPctCrudo === null) {
+    advertencias.push(
+      `Sin la tasa de ponche del pitcher esta proyección sale entera del ancla (${anclaUsada}) — no significa gran cosa.`,
+    );
+  } else if (Math.abs(kPctPitcher - kPctCrudo) >= 1.5) {
+    advertencias.push(
+      `Muestra chica (${Math.round(bateadoresDeMuestra)} BF): su ${kPctCrudo.toFixed(1)}% de K se ajustó a ` +
+        `${kPctPitcher.toFixed(1)}% empujándolo hacia ${anclaUsada}. Con tan pocos bateadores el número crudo ` +
+        `es más suerte que habilidad.`,
+    );
+  }
 
   // --- De K esperados a probabilidad de pasar la línea ---
   const lineaEsEntera = Number.isInteger(entrada.linea);
@@ -243,6 +399,7 @@ export function proyectarPonches(entrada: EntradaProyeccion): ResultadoProyeccio
     probEmpate,
     veredicto,
     confianza,
+    ajustePorMuestra,
     entradasUsadas,
     supuestos,
     advertencias,

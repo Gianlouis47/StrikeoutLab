@@ -1,0 +1,70 @@
+-- Migración aplicada el 2026-08-28. Le enseña a la calculadora la diferencia
+-- entre una tasa y un número con suerte adentro.
+--
+-- EL PROBLEMA
+--
+-- Zach Eflin tenía 41.2% de K% en la base y la calculadora se lo creía. Ese
+-- 41.2% sale de UNA salida: 7 ponches en 17 bateadores. Joe La Sorsa figuraba
+-- con 50%, de 1 K en 2 bateadores. En los datos cargados hay 297 lanzadores
+-- con menos de 30 bateadores enfrentados, y su K% va de 0% a 60% — no porque
+-- unos sean seis veces mejores que otros, sino porque con esa muestra el
+-- número es casi todo ruido.
+--
+-- LA SOLUCIÓN: regresión a la media (Bayes empírico)
+--
+--   estimado = (observado × muestra + ancla × K) / (muestra + K)
+--
+-- K es la constante de estabilización: el tamaño de muestra al que la mitad
+-- de lo observado ya es habilidad y no suerte. Con muestra 0 el estimado es
+-- el ancla entera; con muestra grande, prácticamente lo observado.
+--
+--   K% .............. 70 bateadores enfrentados (Carleton / Baseball Prospectus)
+--   WHIP ............ 500 bateadores enfrentados (estabiliza lento: arrastra el BABIP)
+--   IP por salida ... 6 salidas (medido acá, ver abajo)
+--
+-- El ancla del K% no es siempre el promedio de liga: si hay SwStr% del
+-- lanzador se usa la recta SwStr%→K% ajustada sobre nuestros propios datos.
+-- Medido: el swing-and-miss explica el 75% de la varianza del K% (R²=0.75,
+-- n=55) y estabiliza en cientos de lanzamientos en vez de cientos de
+-- bateadores, así que es mejor punto de partida que el promedio de todos.
+--
+-- CÓMO SE MIDIÓ LA CONSTANTE DE IP POR SALIDA
+--
+-- Descomponiendo la varianza sobre los abridores cargados:
+--     Var(observado) = Var(verdadera) + sigma_dentro² / n
+-- De ahí sale sigma_dentro = 1.51 IP por salida, que coincide con el valor
+-- conocido de MLB — buena señal de que la medición no está torcida — y
+-- Var(verdadera) ≈ 0.38, o sea K = 1.51² / 0.38 ≈ 6 salidas.
+--
+-- DOS CORRECCIONES QUE SALIERON EN EL CAMINO
+--
+-- 1. ip_por_salida se guarda en DECIMAL (183.67 IP / 28 salidas = 6.56), no
+--    en notación de béisbol. La versión anterior la trataba como notación de
+--    béisbol y convertía 5.31 en 5.67, inflando los bateadores enfrentados
+--    hasta un 7%. (Ojo: game_logs.ip SÍ viene en notación de béisbol, porque
+--    sale de un boxscore. Son dos cosas distintas.)
+--
+-- 2. El ancla de duración era el promedio simple por lanzador (4.95 IP), que
+--    mezcla al abridor de 30 aperturas con el emergente de una. Lo correcto
+--    es cuánto dura una salida real: IP totales / salidas totales = 5.17.
+--
+-- QUÉ QUEDÓ APLICADO
+--
+--   anclas_liga()            todas las anclas, recalculadas sobre los datos
+--                            cargados en cada llamada — mientras más datos
+--                            haya, mejores anclas, sin tocar código
+--   proyectar_ponches(...)   ahora regresa a la media y devuelve
+--                            "ajuste_por_muestra" para poder auditar cuánto
+--                            se movió cada stat y por qué
+--
+-- EFECTO MEDIDO SOBRE CASOS REALES
+--
+--   Eflin      (17 BF) : 41.2% → 25.8%   (lo observado pesa 0.20)
+--   La Sorsa    (2 BF) : 50.0% → 22.9%   (lo observado pesa 0.03)
+--   Skubal    (477 BF) : 30.9% → 29.8%   (lo observado pesa 0.87)
+--   deGrom    (545 BF) : 29.4% → 28.6%   (lo observado pesa 0.89)
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro. La versión en TypeScript de la misma matemática, con sus
+-- pruebas, está en packages/core/src/proyeccion.ts — ambas deben dar el
+-- mismo número.

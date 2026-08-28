@@ -197,6 +197,10 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
   }
 
   const coincide = proyeccion?.veredicto === pick;
+  const ajuste = proyeccion?.ajuste_por_muestra;
+  // Solo vale la pena mostrar el crudo si el ajuste lo movió de verdad.
+  const ajusteMovioElKPct =
+    ajuste?.k_pct_crudo != null && Math.abs(ajuste.k_pct_ajustado - ajuste.k_pct_crudo) >= 1;
 
   return (
     <ScrollView style={estilos.pantalla} contentContainerStyle={estilos.contenido} keyboardShouldPersistTaps="handled">
@@ -270,7 +274,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
 
       {error && <Mensaje tipo="error" texto={error} />}
 
-      {proyeccion && (
+      {proyeccion && ajuste && (
         <Tarjeta elevada>
           {/* El número que responde la pregunta, arriba y grande. */}
           <View style={{ alignItems: "center", gap: 2, paddingVertical: 6 }}>
@@ -341,14 +345,17 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
 
           <View style={{ height: 1, backgroundColor: colores.borde, marginVertical: 6 }} />
 
+          {/* Se muestran los valores que la calculadora usó de verdad — los
+              ajustados por muestra — porque enseñar el K% crudo al lado de una
+              proyección hecha con otro número se lee como una contradicción. */}
           <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 18 }}>
             {proyeccion.pitcher}
-            {proyeccion.stats_usadas.k_pct != null ? ` · K% ${proyeccion.stats_usadas.k_pct}` : ""}
-            {proyeccion.stats_usadas.whip != null ? ` · WHIP ${proyeccion.stats_usadas.whip}` : ""}
-            {proyeccion.stats_usadas.ip_por_salida != null
-              ? ` · ${proyeccion.stats_usadas.ip_por_salida} IP por salida`
-              : ""}
+            {` · K% ${ajuste.k_pct_ajustado}`}
+            {ajusteMovioElKPct ? ` (crudo ${ajuste.k_pct_crudo})` : ""}
+            {` · WHIP ${ajuste.whip_ajustado}`}
+            {` · ${ajuste.ip_por_salida_ajustado} IP por salida`}
             {proyeccion.rival ? `\nRival: ${proyeccion.fuente_k_rival}` : ""}
+            {`\nMuestra: ${ajuste.bateadores_de_muestra} bateadores enfrentados`}
           </Text>
 
           {proyeccion.advertencias.map((a, i) => (

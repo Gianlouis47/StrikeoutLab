@@ -16,6 +16,26 @@ export interface StatsUsadas {
   chase_pct: number | null;
 }
 
+/**
+ * Cuánto se corrigió cada stat por el tamaño de la muestra. Un lanzador con
+ * dos bateadores enfrentados y un ponche tiene 50% de K%, y eso no es una
+ * tasa: es ruido. La calculadora lo empuja hacia un ancla en proporción a lo
+ * poco que sabemos, y acá queda el rastro para poder auditarlo.
+ */
+export interface AjustePorMuestra {
+  bateadores_de_muestra: number;
+  /** Cuánto pesó lo observado frente al ancla, 0-1. */
+  peso_de_lo_observado: number;
+  k_pct_crudo: number | null;
+  k_pct_ajustado: number;
+  whip_crudo: number | null;
+  whip_ajustado: number;
+  ip_por_salida_crudo: number | null;
+  ip_por_salida_ajustado: number;
+  /** De dónde salió el ancla del K%, en palabras. */
+  ancla_usada: string;
+}
+
 export interface Proyeccion {
   encontrado: true;
   pitcher: string;
@@ -35,6 +55,7 @@ export interface Proyeccion {
   confianza: number;
   nivel: "DIAMANTE_ALTO" | "DIAMANTE" | "ORO_ALTO" | "ORO" | "IMPUREZA";
   stats_usadas: StatsUsadas;
+  ajuste_por_muestra: AjustePorMuestra;
   entradas_usadas: string[];
   supuestos: string[];
   advertencias: string[];

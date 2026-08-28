@@ -204,6 +204,9 @@ export default function ChatScreen() {
     const guardado = !!burbuja.pickGuardadoId;
     const faltaEquipo = !p.equipo;
     const colorLado = p.veredicto === "OVER" ? colores.exito : colores.advertencia;
+    const ajusteVisible =
+      p.ajuste_por_muestra?.k_pct_crudo != null &&
+      Math.abs(p.ajuste_por_muestra.k_pct_ajustado - p.ajuste_por_muestra.k_pct_crudo) >= 1.5;
 
     return (
       <View
@@ -258,6 +261,16 @@ export default function ChatScreen() {
           tono={p.confianza >= 0.85 ? "exito" : p.confianza >= 0.8 ? "advertencia" : "peligro"}
           alto={5}
         />
+
+        {/* Si la muestra del lanzador es chica, el número crudo no es una tasa
+            sino ruido, y la calculadora lo corrigió. Vale decirlo acá mismo:
+            es la diferencia entre un pick de 41% de K% y uno de 26%. */}
+        {ajusteVisible && (
+          <Text style={{ color: colores.textoSuave, fontSize: 11, lineHeight: 16 }}>
+            Con solo {p.ajuste_por_muestra.bateadores_de_muestra} bateadores enfrentados, su{" "}
+            {p.ajuste_por_muestra.k_pct_crudo}% de K se ajustó a {p.ajuste_por_muestra.k_pct_ajustado}%.
+          </Text>
+        )}
 
         {faltaEquipo && !guardado && (
           <Text style={{ color: colores.advertencia, fontSize: 12 }}>
