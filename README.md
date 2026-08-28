@@ -128,26 +128,64 @@ bloqueado `api.expo.dev`; si Expo Go se queja de una versión
 incompatible, corré `npx expo install expo-image-picker` vos mismo desde
 tu computadora (sin esa restricción) para que ajuste la versión exacta.
 
-Para tener la app instalada permanentemente en tu teléfono (sin depender
-de que el servidor de desarrollo esté corriendo), el siguiente paso es
-[EAS Build](https://docs.expo.dev/build/introduction/) — genera un
-instalable real. No se configuró en esta sesión; es la extensión natural
-cuando quieras "instalarla y ya".
+### 3. Generar el APK instalable
+
+Para tener la app en el teléfono sin depender de que el servidor de
+desarrollo esté corriendo, `eas.json` ya trae el perfil `apk` con las
+variables de Supabase adentro, así que no hay nada que configurar:
+
+```bash
+cd apps/mobile
+npm run apk
+```
+
+Si el build sale raro después de cambiar dependencias, `npm run apk:limpio`
+hace lo mismo con `--clear-cache` (tarda bastante más, usalo solo si hace
+falta).
+
+**Ojo con el nombre del paquete.** El binario se llama `eas` pero vive en
+el paquete `eas-cli`, así que `npx eas build` falla con
+`could not determine executable to run`. Los scripts de arriba usan
+`eas-cli`, que es el nombre correcto. Si preferís el comando suelto,
+instalalo global una vez y te ahorrás la espera de `npx` en cada build:
+
+```bash
+npm install -g eas-cli
+eas build --platform android --profile apk
+```
+
+La primera vez pide login de Expo (`eas login`) y ofrece crear las
+credenciales de firma de Android — aceptá, es automático. El build corre
+en los servidores de Expo (10-20 minutos) y termina dando un link para
+bajar el APK al teléfono.
 
 ## Pantallas de la app
 
+La idea es que casi todo pase en **Análisis**: vos entregás la información
+y la IA hace el resto. Las demás quedan detrás del botón **Más**, para
+cuando querés meter mano a algo puntual.
+
+Principales:
+
+- **Análisis** (el chat) — mandás una foto o escribís, y la IA lee, busca
+  los datos, llama a la calculadora, evalúa contra la cuota y te devuelve
+  el pick armado con un botón para guardarlo. Cierra siempre con una
+  sugerencia o una pregunta.
+- **Historial** — picks recientes; tocá uno pendiente para registrar los
+  K reales — el `resultado` lo deriva la base de datos, no se escribe a
+  mano. Cada resultado que cargás mejora la calibración.
 - **Calibración** — confianza declarada vs. tasa real de acierto, por
   banda, y resumen económico.
-- **Nuevo Pick** — formulario + botón para pedirle una opinión `JUICIO` a
-  la IA (informada por tu historial real) antes de guardar.
-- **Foto** — tomar/elegir una foto (ticket de Star Sport, captura de
-  stats, boxscore); la IA de visión extrae los datos y podés pasarlos
-  directo al formulario de Nuevo Pick.
-- **Historial** — picks recientes; tocá uno pendiente para registrar el
-  resultado real (K reales) — el `resultado` lo deriva la base de datos.
+
+Detrás de **Más**:
+
+- **Pick manual** — el formulario, para cargar algo a mano. Muestra la
+  proyección y el veredicto CONVIENE / FLOJO / NO CONVIENE.
+- **Parlay** — la escalera de 1 a 12 patas: probabilidad, valor esperado,
+  con cuánto terminás y riesgo de fundirte, con la fila óptima resaltada.
 - **Rivales** — ranking de equipos por tasa de ponches, nunca por total.
-- **Parlay** — probabilidad combinada real de un parlay, con advertencia
-  si dos patas son del mismo juego.
+- **Foto** y **Salida** — atajos viejos que sobreviven por comodidad; lo
+  normal es hacerlos desde Análisis.
 
 ## Reglas de negocio (sin cambios respecto al diseño original)
 
