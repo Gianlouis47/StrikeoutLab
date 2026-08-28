@@ -41,6 +41,9 @@ const MODELOS_RAZONAMIENTO = (Deno.env.get("NVIDIA_MODELOS_TEXTO") ??
 
 const MAX_RONDAS = 6;
 
+/** Qué versión del sistema produce las confianzas de hoy. Ver picks.sistema. */
+const SISTEMA_ACTUAL = "PROYECCION";
+
 // ---------------------------------------------------------------------
 // Visión
 // ---------------------------------------------------------------------
@@ -245,6 +248,11 @@ const HERRAMIENTAS = [
             type: "number",
             description: "Qué porcentaje del bankroll apuesta por ticket. Por defecto 5.",
           },
+          sistema: {
+            type: "string",
+            enum: ["PROYECCION", "HEURISTICO"],
+            description: "Con qué calibración corregir. Por defecto PROYECCION, el sistema actual.",
+          },
         },
         required: ["probabilidades"],
       },
@@ -273,8 +281,17 @@ const HERRAMIENTAS = [
     function: {
       name: "calibracion_real",
       description:
-        "Cuánto vale de verdad la confianza del modelo, medido contra los picks que ya tienen resultado. Usalo cuando el usuario pregunte si puede confiar en los números, o cuando quieras respaldar por qué recomendás menos patas de las que él quiere.",
-      parameters: { type: "object", properties: {} },
+        "Cuánto vale de verdad la confianza del modelo, medido contra los picks que ya tienen resultado. Se mide por sistema: PROYECCION es la calculadora de ahora, HEURISTICO el puntuador viejo. Usalo cuando el usuario pregunte si puede confiar en los números, o para respaldar por qué recomendás menos patas de las que él quiere.",
+      parameters: {
+        type: "object",
+        properties: {
+          sistema: {
+            type: "string",
+            enum: ["PROYECCION", "HEURISTICO"],
+            description: "Por defecto PROYECCION, el sistema actual.",
+          },
+        },
+      },
     },
   },
   {
@@ -392,6 +409,10 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
         // Sale de la calculadora sobre stats de temporada, no de contar
         // salidas reales: por definición del esquema eso es JUICIO.
         fuente_confianza: "JUICIO",
+        // Qué versión produjo la confianza. La calibración se mide por
+        // sistema: castigar a la calculadora nueva por los errores del
+        // puntuador viejo sería tan equivocado como creerle sin medirla.
+        sistema: SISTEMA_ACTUAL,
         motivo: args.motivo ?? null,
       });
       if (error) return { guardado: false, error: error.message };
@@ -415,6 +436,7 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
         p_apuestas_por_temporada: 100,
         p_etiquetas: args.etiquetas ?? null,
         p_apuesta_fija_pct: args.apuesta_fija_pct ?? 5,
+        p_sistema: args.sistema ?? SISTEMA_ACTUAL,
       });
       if (error) return { error: error.message };
       return data;
@@ -423,7 +445,7 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
     case "picks_guardados": {
       let consulta = supabase
         .from("picks")
-        .select("pitcher, equipo, rival, linea, pick, confianza, nivel, resultado")
+        .select("pitcher, equipo, rival, linea, pick, confianza, nivel, resultado, sistema")
         .eq("fecha", args.fecha ?? new Date().toISOString().slice(0, 10));
       if (args.solo_pendientes !== false) consulta = consulta.is("resultado", null);
       const { data, error } = await consulta.order("confianza", { ascending: false });
@@ -435,7 +457,9 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
     }
 
     case "calibracion_real": {
-      const { data, error } = await supabase.rpc("calibracion_real");
+      const { data, error } = await supabase.rpc("calibracion_real", {
+        p_sistema: args.sistema ?? SISTEMA_ACTUAL,
+      });
       if (error) return { error: error.message };
       return data;
     }
@@ -505,7 +529,8 @@ REGLAS DURAS:
 - Nunca inventes un número. Si no está en la base o en una búsqueda, no existe.
 - Una línea entera (ej. 7) puede terminar en empate y devuelven la plata: tenelo en cuenta al recomendar, y avisá que en parlay eso depende de qué haga Star Sport con la pata.
 - El corte no es la confianza, es la cuota: al -130 hace falta 56.5% para empatar. "Conviene" lo dice evaluar_apuesta, no vos.
-- La confianza del modelo está inflada y hay historial que lo prueba. Si él pregunta por qué bajás los números, llamá a "calibracion_real" y mostrale los aciertos reales contra la confianza declarada.
+- La calibración se mide POR SISTEMA. El sistema de ahora es PROYECCION y todavía no tiene picks con resultado, así que su confianza se comprime al 35% de su distancia al 50% — no por castigo, sino porque sin historial no hay con qué sostener más: al -130 el equilibrio está en 56.5% y la casa se queda con ~13%, así que una ventaja grande de verdad no existe. El puntuador viejo (HEURISTICO) sacó 3 de 13 declarando 81%; eso NO se hereda, es otro método, pero si él pregunta por qué bajás los números llamá a "calibracion_real" y mostrale las dos cosas.
+- Cada pick que se guarde alimenta la calibración del sistema nuevo. Si él quiere números menos castigados, la salida es cargar resultados, no subir la confianza: decíselo así.
 - El valor esperado de un parlay SUBE con cada pata y aun así te funde: son cosas distintas. Si citás el valor esperado de un parlay largo, citá al lado la mediana y la probabilidad de fundirte, o estás mintiendo por omisión.
 - Si el nombre del lanzador es ambiguo (la calculadora te avisa), preguntá cuál es antes de dar la recomendación por buena.`;
 

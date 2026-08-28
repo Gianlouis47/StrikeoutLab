@@ -5,6 +5,7 @@ import {
   Barra,
   Boton,
   Campo,
+  Insignia,
   Mensaje,
   Seccion,
   Subtitulo,
@@ -200,7 +201,10 @@ export default function ParlayScreen() {
                   );
                 })}
                 <Text style={{ color: colores.textoSuave, fontSize: 11, lineHeight: 16, marginTop: 4 }}>
-                  {resultado.como_leer_la_escalera}
+                  «Te fundís» es terminar con menos del 20% de lo que empezaste, no exactamente en cero:
+                  apostando una fracción fija nunca se llega a cero, pero abajo del 20% ya no hay con qué
+                  seguir. Supone apostar el {resultado.apuesta_fija_pct}% del bankroll{" "}
+                  {resultado.apuestas_simuladas} veces.
                 </Text>
                 {/* El dato que desarma la trampa: más patas suben el valor
                     esperado y aun así te funden. */}
@@ -214,12 +218,43 @@ export default function ParlayScreen() {
           </Tarjeta>
 
           <Tarjeta>
-            <Text style={{ color: colores.texto, fontWeight: "700", fontSize: 14, marginBottom: 6 }}>
-              Por qué tus números bajaron
-            </Text>
+            <View style={[estilos.filaEntreEspacio, { marginBottom: 6 }]}>
+              <Text style={{ color: colores.texto, fontWeight: "700", fontSize: 14 }}>
+                Por qué tus números bajaron
+              </Text>
+              <Insignia
+                texto={resultado.calibracion.confiabilidad}
+                tono={
+                  resultado.calibracion.confiabilidad === "BUENA"
+                    ? "exito"
+                    : resultado.calibracion.confiabilidad === "RAZONABLE"
+                      ? "acento"
+                      : "advertencia"
+                }
+              />
+            </View>
             <Text style={{ color: colores.textoSuave, fontSize: 12, lineHeight: 18 }}>
               {resultado.calibracion.explicacion}
             </Text>
+
+            {resultado.calibracion.aviso && (
+              <Text style={{ color: colores.advertencia, fontSize: 12, lineHeight: 18, marginTop: 8 }}>
+                {resultado.calibracion.aviso}
+              </Text>
+            )}
+
+            {/* El historial de los otros sistemas no maneja el número, pero se
+                muestra: esconderlo sería tan deshonesto como heredarlo. */}
+            {resultado.calibracion.otros_sistemas.length > 0 && (
+              <View style={{ marginTop: 8, gap: 3 }}>
+                {resultado.calibracion.otros_sistemas.map((o) => (
+                  <Text key={o.sistema} style={{ color: colores.textoSuave, fontSize: 11, lineHeight: 16 }}>
+                    Sistema {o.sistema}: {o.aciertos} de {o.decididos} declarando{" "}
+                    {((o.confianza_declarada_media ?? 0) * 100).toFixed(0)}%.
+                  </Text>
+                ))}
+              </View>
+            )}
             <View style={{ flexDirection: "row", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               {resultado.patas.map((p, i) => (
                 <View

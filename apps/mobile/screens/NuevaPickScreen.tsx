@@ -17,6 +17,7 @@ import {
 import {
   evaluarApuesta,
   proyectarPonches,
+  SISTEMA_ACTUAL,
   type EvaluacionApuesta,
   type Proyeccion,
 } from "../lib/calculadora";
@@ -190,6 +191,7 @@ export default function NuevaPickScreen({ borrador }: { borrador?: BorradorPick 
         confianza: d.confianza,
         nivel: d.nivel,
         fuente_confianza: d.fuenteConfianza,
+        sistema: SISTEMA_ACTUAL,
         motivo: d.motivo,
       });
       setOk(`Pick de ${d.pitcher} guardado.`);

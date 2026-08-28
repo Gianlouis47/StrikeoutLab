@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   binomialAcumulada,
+  calcularCalibracion,
   evaluarApuesta,
   evaluarParlay,
+  FACTOR_MINIMO,
+  FACTOR_SIN_HISTORIAL,
   gananciaPorPeso,
   probabilidadDeEquilibrio,
 } from "../src/apuesta.js";
@@ -173,5 +176,63 @@ describe("evaluarParlay", () => {
 
   it("rechaza un parlay sin patas", () => {
     expect(() => evaluarParlay([])).toThrow();
+  });
+});
+
+describe("calcularCalibracion", () => {
+  it("sin historial comprime al 35%, no al 90%", () => {
+    // 0.90 se justificaba solo con la sobredispersión de Poisson, que corrige
+    // una pieza chica. Con 0.90 un 85% quedaba en 81.5% y la escalera del
+    // parlay llegaba a recomendar once patas.
+    const c = calcularCalibracion(null);
+    expect(c.factor).toBe(0.35);
+    expect(c.confiabilidad).toBe("SIN DATOS");
+    expect(c.tasaObservada).toBeNull();
+  });
+
+  it("con el 35% la escala queda donde se puede sostener", () => {
+    const honesta = (declarada: number) => 0.5 + (declarada - 0.5) * FACTOR_SIN_HISTORIAL;
+    const equilibrio = probabilidadDeEquilibrio(-130);
+    // Solo los picks más fuertes le ganan al -130 sin historial que lo respalde.
+    expect(honesta(0.85)).toBeGreaterThan(equilibrio);
+    expect(honesta(0.75)).toBeGreaterThan(equilibrio);
+    expect(honesta(0.62)).toBeLessThan(equilibrio);
+    expect(honesta(0.85)).toBeCloseTo(0.6225, 4);
+  });
+
+  it("reproduce el historial real del puntuador viejo", () => {
+    // 3 aciertos en 13 declarando 80.7%: la calibración de Postgres da 0.25.
+    const c = calcularCalibracion({ decididos: 13, aciertos: 3, confianzaDeclaradaMedia: 0.8069 });
+    expect(c.tasaObservada).toBeCloseTo(0.2308, 4);
+    expect(c.factor).toBe(0.25); // toca el piso
+    expect(c.confiabilidad).toBe("PRELIMINAR");
+  });
+
+  it("un sistema que acierta lo que declara no se toca", () => {
+    const c = calcularCalibracion({ decididos: 200, aciertos: 130, confianzaDeclaradaMedia: 0.65 });
+    expect(c.tasaObservada).toBeCloseTo(0.65, 4);
+    expect(c.factor).toBeGreaterThan(0.8);
+    expect(c.confiabilidad).toBe("BUENA");
+  });
+
+  it("nunca aplasta todo contra el 50%, por malo que sea el historial", () => {
+    const c = calcularCalibracion({ decididos: 500, aciertos: 0, confianzaDeclaradaMedia: 0.9 });
+    expect(c.factor).toBe(FACTOR_MINIMO);
+  });
+
+  it("cuanta más muestra, más manda lo observado sobre el previo", () => {
+    const pocos = calcularCalibracion({ decididos: 5, aciertos: 1, confianzaDeclaradaMedia: 0.8 });
+    const muchos = calcularCalibracion({ decididos: 200, aciertos: 40, confianzaDeclaradaMedia: 0.8 });
+    expect(muchos.tasaEstimada!).toBeLessThan(pocos.tasaEstimada!);
+    expect(muchos.confiabilidad).toBe("BUENA");
+  });
+
+  it("la confiabilidad sube con el tamaño de muestra", () => {
+    const nivel = (n: number) =>
+      calcularCalibracion({ decididos: n, aciertos: Math.round(n * 0.6), confianzaDeclaradaMedia: 0.7 })
+        .confiabilidad;
+    expect(nivel(10)).toBe("PRELIMINAR");
+    expect(nivel(50)).toBe("RAZONABLE");
+    expect(nivel(150)).toBe("BUENA");
   });
 });

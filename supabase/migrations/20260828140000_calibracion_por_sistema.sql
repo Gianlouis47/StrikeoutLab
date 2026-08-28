@@ -1,0 +1,86 @@
+-- Migración aplicada el 2026-08-28. La calibración se mide por sistema, y en
+-- el camino apareció un error grande en el descuento por defecto.
+--
+-- ============================================================
+-- 1. UNA COLUMNA `sistema` EN picks
+-- ============================================================
+--
+-- Los 14 picks del 25 de agosto salieron del puntuador heurístico viejo:
+-- declaraba 81% de confianza y acertó 3 de 13. Eso comprimía la confianza al
+-- 25% de su distancia al 50%, y se lo estábamos aplicando a la calculadora
+-- nueva, que es otra cosa — regresa a la media, usa whiff%, y sus confianzas
+-- viven en otro rango (deGrom sale 54%, no 81%).
+--
+--   HEURISTICO  el puntuador viejo (los 14 picks existentes)
+--   PROYECCION  la calculadora de log5 + Poisson con regresión a la media
+--
+-- calibracion_real(sistema) mide cada uno por separado. No hereda: son
+-- métodos distintos y la magnitud del error no se traslada. Pero informa
+-- siempre el historial de los otros en `otros_sistemas`, porque esconderlo
+-- sería tan deshonesto como heredarlo.
+--
+-- ============================================================
+-- 2. EL DESCUENTO SIN HISTORIAL ERA 0.90 Y ESTABA MAL
+-- ============================================================
+--
+-- Lo había justificado con la sobredispersión de Poisson: la varianza real de
+-- los ponches es ~1.2 veces la de Poisson, así que las probabilidades
+-- extremas salen estiradas. Es cierto, pero corrige una pieza chica.
+--
+-- Mientras todo se calibraba junto quedaba tapado por el 0.25 que traía el
+-- historial del sistema viejo. Al separar por sistema quedó a la vista: con
+-- 0.90 un 85% declarado se trataba como 81.5% real, y la escalera del parlay
+-- pasó a recomendar ONCE patas con una mediana de 12 billones.
+--
+-- Un 81.5% real contra una línea puesta por la casa sería una ventaja
+-- descomunal. Al -130 el equilibrio está en 56.5%, y una línea a -130 por los
+-- dos lados le deja a Star Sport cerca del 13%. Los que viven de esto rondan
+-- 53-55% en mercados líquidos. Poisson no explica el lineup del día, que
+-- saquen al abridor en la cuarta, ni que la línea ya sepa algo que nosotros no.
+--
+-- Queda 0.35, que comprime hacia el 50%:
+--
+--   85% declarado → 62.3%   CONVIENE (ventaja real, modesta)
+--   75% declarado → 58.8%   FLOJO
+--   62% declarado → 54.2%   NO CONVIENE (no llega al equilibrio del -130)
+--
+-- Y la escalera vuelve a decir algo sensato: óptimo en 4 patas (mediana
+-- 3.03×), mientras 12 patas siguen teniendo el mayor valor esperado (+2.18)
+-- con mediana 0.006× y 71% de fundirse. La firma de la rifa queda visible sin
+-- ser absurda.
+--
+-- SEGUNDO ARREGLO, EN EL PREVIO DEL BAYES
+--
+-- El previo se calculaba como `confianza_media × descuento`, que con 0.90
+-- daba 0.73 (pasable de casualidad) pero con 0.35 daría 0.28 — un disparate
+-- como tasa de acierto. El descuento comprime la VENTAJA sobre el 50%, no
+-- multiplica la tasa. El previo correcto es 0.5 + (media − 0.5) × descuento,
+-- que con 80.7% declarado da 60.7%.
+--
+-- ============================================================
+-- 3. DOS COSAS QUE HABRÍAN EXPLOTADO EN PRODUCCIÓN
+-- ============================================================
+--
+-- a) `create or replace function` con un parámetro nuevo NO reemplaza: crea
+--    otra función. Habían quedado tres evaluar_parlay conviviendo y dos
+--    calibracion_real. Postgres resuelve por cantidad de argumentos, así que
+--    la llamada de la Edge Function (5 argumentos) caía en una versión vieja
+--    que a su vez invocaba calibracion_real() sin argumentos — que ya no
+--    existía. Se borraron las sobrecargas muertas.
+--
+-- b) `valor_esperado` es ambiguo y la IA lo leyó al revés: dijo "el valor
+--    esperado es 0,78, perdés 0,22 por peso" cuando +0.7846 es GANANCIA de 78
+--    centavos. Se agregó `ganancia_esperada_por_peso` con el mismo número y el
+--    signo explicado en el texto que la IA lee junto a la tabla. Verificado
+--    contra la función desplegada: ahora dice "+0.7846 → ganás ≈78 centavos
+--    por peso" y explica bien la paradoja del parlay largo.
+--
+-- También se precisó qué significa fundirse: terminar bajo el 20% de lo que
+-- se empezó, no exactamente en cero (apostando fracción fija nunca se llega a
+-- cero). La IA lo estaba describiendo como "perder todo el bankroll".
+--
+-- ============================================================
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro. La copia en TypeScript de la calibración, con sus pruebas, está
+-- en packages/core/src/apuesta.ts (calcularCalibracion).

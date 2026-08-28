@@ -112,6 +112,16 @@ export async function buscarPitcher(nombre: string): Promise<CandidatoPitcher[]>
 /** Cuota típica de Star Sport: arriesgar 130 para ganar 100. */
 export const CUOTA_POR_DEFECTO = -130;
 
+/**
+ * Qué versión del sistema produce las confianzas de hoy. Va guardado en cada
+ * pick porque la calibración se mide por sistema: castigar a la calculadora
+ * nueva por los errores del puntuador viejo sería tan equivocado como creerle
+ * sin haberla medido.
+ */
+export const SISTEMA_ACTUAL = "PROYECCION" as const;
+
+export type Sistema = "PROYECCION" | "HEURISTICO";
+
 export type VeredictoApuesta = "CONVIENE" | "FLOJO" | "NO CONVIENE";
 
 export interface EvaluacionApuesta {
@@ -149,15 +159,29 @@ export async function evaluarApuesta(params: {
   return data as EvaluacionApuesta;
 }
 
+export interface HistorialDeSistema {
+  sistema: Sistema;
+  decididos: number;
+  aciertos: number;
+  tasa_observada: number | null;
+  confianza_declarada_media: number | null;
+}
+
 export interface Calibracion {
+  sistema: Sistema;
   factor: number;
   confiabilidad: "SIN DATOS" | "PRELIMINAR" | "RAZONABLE" | "BUENA";
   picks_decididos: number;
+  picks_pendientes: number;
   aciertos: number;
   empates: number;
   tasa_observada: number | null;
   tasa_estimada: number | null;
   confianza_declarada_media: number | null;
+  /** Qué hicieron los otros sistemas. No maneja el número, pero se muestra. */
+  otros_sistemas: HistorialDeSistema[];
+  /** Advertencia sobre lo poco que se puede concluir todavía, si aplica. */
+  aviso: string | null;
   explicacion: string;
 }
 
@@ -201,6 +225,7 @@ export async function evaluarParlay(params: {
   etiquetas?: string[];
   cuota?: number;
   apuestaFijaPct?: number;
+  sistema?: Sistema;
 }): Promise<EvaluacionParlay> {
   const { data, error } = await supabase.rpc("evaluar_parlay", {
     p_probabilidades: params.probabilidades,
@@ -208,14 +233,15 @@ export async function evaluarParlay(params: {
     p_apuestas_por_temporada: 100,
     p_etiquetas: params.etiquetas ?? null,
     p_apuesta_fija_pct: params.apuestaFijaPct ?? 5,
+    p_sistema: params.sistema ?? SISTEMA_ACTUAL,
   });
   if (error) throw new Error(error.message);
   return data as EvaluacionParlay;
 }
 
-/** Cuánto vale de verdad la confianza del modelo, según el historial. */
-export async function calibracionReal(): Promise<Calibracion> {
-  const { data, error } = await supabase.rpc("calibracion_real");
+/** Cuánto vale de verdad la confianza de un sistema, según su historial. */
+export async function calibracionReal(sistema: Sistema = SISTEMA_ACTUAL): Promise<Calibracion> {
+  const { data, error } = await supabase.rpc("calibracion_real", { p_sistema: sistema });
   if (error) throw new Error(error.message);
   return data as Calibracion;
 }

@@ -131,6 +131,91 @@ export function evaluarApuesta(
   };
 }
 
+/**
+ * Cuánto se comprime la confianza de un sistema que todavía no tiene
+ * historial propio.
+ *
+ * No es 0.90. La sobredispersión de Poisson (la varianza real de los ponches
+ * es ~1.2 veces la de Poisson) justificaría algo así, pero corrige una pieza
+ * chica: no dice nada del lineup del día, de que saquen al abridor en la
+ * cuarta, ni de que la línea de la casa ya sepa algo que el modelo no.
+ *
+ * El número sale de mirar contra qué se apuesta. Al -130 el equilibrio está
+ * en 56.5%, y una línea a -130 por los dos lados le deja a la casa cerca del
+ * 13%. Ganarle a eso con 81% no le pasa a nadie — los que viven de esto
+ * rondan 53-55% en mercados líquidos. Comprimiendo al 35%:
+ *
+ *   85% declarado → 62.3%   (ventaja real, modesta)
+ *   75% declarado → 58.8%
+ *   62% declarado → 54.2%   (no llega al equilibrio del -130)
+ *
+ * Se respeta la dirección del modelo, no su magnitud. Con historial propio
+ * este número deja de usarse: lo reemplaza lo medido.
+ */
+export const FACTOR_SIN_HISTORIAL = 0.35;
+
+/** Picks decididos a los que la mitad de lo observado ya es señal. */
+export const ESTABILIZACION_CALIBRACION = 25;
+
+/** Por malo que se vea el historial, no se aplasta todo contra el 50%. */
+export const FACTOR_MINIMO = 0.25;
+
+export interface HistorialSistema {
+  /** Picks que ya ganaron o perdieron. Los empates no cuentan: devuelven. */
+  decididos: number;
+  aciertos: number;
+  /** Confianza media que el sistema declaró en esos picks, 0-1. */
+  confianzaDeclaradaMedia: number;
+}
+
+export interface Calibracion {
+  factor: number;
+  confiabilidad: "SIN DATOS" | "PRELIMINAR" | "RAZONABLE" | "BUENA";
+  tasaObservada: number | null;
+  tasaEstimada: number | null;
+}
+
+/**
+ * Cuánto vale la confianza declarada de un sistema, medida contra lo que pasó.
+ *
+ * Mismo Bayes empírico que la regresión a la media del K%: lo observado pesa
+ * según cuántos picks haya, contra un previo que ya asume que el modelo es
+ * optimista. El previo comprime la VENTAJA sobre el 50% — no multiplica la
+ * tasa, que daría disparates.
+ *
+ * Es la copia de `calibracion_real` de Postgres. Se mide por sistema a
+ * propósito: castigar a la calculadora nueva por los errores del puntuador
+ * viejo es tan equivocado como creerle sin haberla medido.
+ */
+export function calcularCalibracion(historial?: HistorialSistema | null): Calibracion {
+  if (!historial || historial.decididos <= 0) {
+    return {
+      factor: FACTOR_SIN_HISTORIAL,
+      confiabilidad: "SIN DATOS",
+      tasaObservada: null,
+      tasaEstimada: null,
+    };
+  }
+
+  const { decididos, aciertos, confianzaDeclaradaMedia: conf } = historial;
+  const tasaObservada = aciertos / decididos;
+  const previo = 0.5 + (conf - 0.5) * FACTOR_SIN_HISTORIAL;
+  const tasaEstimada =
+    (aciertos + ESTABILIZACION_CALIBRACION * previo) / (decididos + ESTABILIZACION_CALIBRACION);
+
+  const factor =
+    conf > 0.5
+      ? Math.max(FACTOR_MINIMO, Math.min(1, (tasaEstimada - 0.5) / (conf - 0.5)))
+      : FACTOR_SIN_HISTORIAL;
+
+  return {
+    factor,
+    confiabilidad: decididos >= 100 ? "BUENA" : decididos >= 30 ? "RAZONABLE" : "PRELIMINAR",
+    tasaObservada,
+    tasaEstimada,
+  };
+}
+
 /** P(X <= k) para X binomial(n, p). */
 export function binomialAcumulada(k: number, n: number, p: number): number {
   if (k < 0) return 0;

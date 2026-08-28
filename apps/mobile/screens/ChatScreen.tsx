@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { Barra, Boton, Insignia, Mensaje, colores, estilos } from "../components/ui";
-import type { EvaluacionApuesta, Proyeccion } from "../lib/calculadora";
+import { SISTEMA_ACTUAL, type EvaluacionApuesta, type Proyeccion } from "../lib/calculadora";
 import { chat, type MensajeChat } from "../lib/edgeFunctions";
 import { repositorio } from "../lib/supabase-repository";
 
@@ -205,6 +205,7 @@ export default function ChatScreen() {
         nivel: p.nivel,
         // Sale de estadísticas de temporada, no de contar salidas reales.
         fuente_confianza: "JUICIO",
+        sistema: SISTEMA_ACTUAL,
         motivo: `${p.k_proyectados} K proyectados vs línea ${p.linea}. ${p.entradas_usadas.join(", ")}.`,
       });
       setBurbujas((prev) =>
