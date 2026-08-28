@@ -7,6 +7,7 @@ import { Boton, colores, estilos } from "./components/ui";
 import { confirmarAccion } from "./lib/confirmacion";
 import type { DatosExtraidosFoto } from "./lib/edgeFunctions";
 import { supabase } from "./lib/supabase";
+import { useEspacioTeclado } from "./lib/teclado";
 import AnalizarFotoScreen from "./screens/AnalizarFotoScreen";
 import ChatScreen from "./screens/ChatScreen";
 import DashboardScreen from "./screens/DashboardScreen";
@@ -45,6 +46,9 @@ export default function App() {
   const [pestana, setPestana] = useState<PestanaId>("chat");
   const [menuAbierto, setMenuAbierto] = useState(false);
   const [borrador, setBorrador] = useState<BorradorPick | null>(null);
+  // El teclado se maneja acá arriba y no adentro de cada pantalla: así la
+  // barra de pestañas también se corre y ninguna queda tapada por su cuenta.
+  const teclado = useEspacioTeclado();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -72,7 +76,10 @@ export default function App() {
 
   if (!session) {
     return (
-      <SafeAreaView style={estilos.pantalla}>
+      <SafeAreaView
+        style={[estilos.pantalla, { paddingBottom: teclado.espacio }]}
+        onLayout={teclado.onLayout}
+      >
         <LoginScreen />
         <StatusBar style="light" />
       </SafeAreaView>
@@ -82,7 +89,10 @@ export default function App() {
   const enSecundaria = PESTANAS_SECUNDARIAS.some((p) => p.id === pestana);
 
   return (
-    <SafeAreaView style={estilos.pantalla}>
+    <SafeAreaView
+      style={[estilos.pantalla, { paddingBottom: teclado.espacio }]}
+      onLayout={teclado.onLayout}
+    >
       <View style={{ flex: 1 }}>
         {pestana === "chat" && <ChatScreen />}
         {pestana === "dashboard" && <DashboardScreen />}

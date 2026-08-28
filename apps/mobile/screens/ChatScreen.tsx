@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -78,6 +79,16 @@ export default function ChatScreen() {
   const irAlFinal = useCallback(() => {
     setTimeout(() => listaRef.current?.scrollToEnd({ animated: true }), 60);
   }, []);
+
+  // Al abrir el teclado la lista se achica y el último mensaje se va para
+  // arriba. Volver al final deja a la vista lo que se estaba leyendo.
+  useEffect(() => {
+    const alAbrir = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+      irAlFinal,
+    );
+    return () => alAbrir.remove();
+  }, [irAlFinal]);
 
   async function adjuntar(desdeCamara: boolean) {
     setError(null);
@@ -400,9 +411,13 @@ export default function ChatScreen() {
   }
 
   return (
+    // En Android el hueco del teclado lo reserva App.tsx, que mide si la
+    // ventana se achicó sola; acá se apaga para no levantar la barra dos
+    // veces. En iOS sigue mandando esto, que ahí anda bien.
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior="padding"
+      enabled={Platform.OS === "ios"}
       keyboardVerticalOffset={8}
     >
       <FlatList
