@@ -1,0 +1,45 @@
+-- Migración aplicada el 2026-08-27. Resuelve tres problemas que hacían que
+-- la app "no encontrara nada" aunque los datos estuvieran cargados:
+--
+-- 1. La búsqueda de lanzador era por igualdad exacta: un boxscore que dice
+--    "T Rogers" nunca encontraba a "Tyler Rogers".
+-- 2. Cada fuente de datos (MLB Stats API, Savant, FanGraphs) escribía su
+--    propia fila con fecha distinta, y leer solo la más reciente perdía los
+--    campos que esa fuente no traía.
+-- 3. La calculadora puntuaba un pick que vos ya habías elegido, en vez de
+--    proyectar los ponches y deducir el lado sola.
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro. Ver:
+--   - buscar_pitcher(text)        búsqueda tolerante a abreviaciones/acentos
+--   - pitcher_stats_actual        vista que consolida por campo
+--   - proyectar_ponches(...)      la calculadora (log5 + Poisson)
+--
+-- La versión en TypeScript de la misma matemática, con sus pruebas, está en
+-- packages/core/src/proyeccion.ts — ambas deben dar el mismo número.
+
+-- Correcciones posteriores aplicadas el mismo día:
+--
+-- 1. proyectar_ponches usaba `array || 'texto'` para acumular supuestos y
+--    advertencias. Postgres resuelve ese || contra anyarray||anyarray e
+--    intenta castear el string a array, lo que reventaba con "malformed
+--    array literal". Solo pasaba cuando FALTABA un dato, o sea justo en la
+--    rama que esa línea pretendía cubrir, así que no salió en las pruebas
+--    con datos completos. Reemplazado por array_append().
+--
+-- 2. La vista pitcher_stats_actual quedaba como SECURITY DEFINER implícito
+--    y salteaba las políticas RLS de las tablas base. Ahora tiene
+--    security_invoker = true.
+--
+-- 3. buscar_pitcher y proyectar_ponches tenían search_path mutable (vía
+--    para secuestro de esquema). Fijado a public, pg_catalog.
+
+-- Agregado después: columna `equipo` en pitcher_stats_snapshot y en el JSON
+-- que devuelve proyectar_ponches. Sin eso, un pick armado por la IA quedaba
+-- incompleto y había que escribir el equipo a mano, que es justo lo que el
+-- flujo de chat evita.
+--
+-- Se carga desde el roster activo del MLB Stats API (currentTeam), no desde
+-- las stats de temporada: un lanzador que cambió de equipo aparece ahí como
+-- "2 Tms" sin equipo concreto, y para apostar hoy importa dónde juega hoy.
+-- Con currentTeam quedan 823 de 825 con equipo, contra 725 usando stats.

@@ -1,0 +1,81 @@
+-- Migración aplicada el 2026-08-28.
+--
+-- ============================================================
+-- EL PROBLEMA: LA CARTELERA COMPLETA NO ENTRABA
+-- ============================================================
+--
+-- Gianlouis pegó la tabla del día — 15 juegos, 30 lanzadores con su línea —
+-- y la app contestó "Me quedé dando vueltas sin llegar a una respuesta".
+--
+-- No fue un error ni un timeout. El agente tiene un tope de rondas
+-- (MAX_RONDAS, que existe por el límite de tiempo de la Edge Function), y el
+-- modelo estaba llamando a proyectar_ponches de a UN lanzador por ronda. Con
+-- el tope en 6 hizo 6 proyecciones de 30, se quedó sin rondas y devolvió el
+-- mensaje de rendición. El detalle de la pantalla lo mostraba tal cual:
+-- "Usó proyectar_ponches" seis veces seguidas.
+--
+-- Subir el tope no arregla nada: 30 rondas contra un modelo remoto no entran
+-- en el tiempo de la función. El problema es la granularidad, no el número.
+--
+-- ============================================================
+-- LA SOLUCIÓN
+-- ============================================================
+--
+-- proyectar_varios recibe el arreglo entero y hace las 30 proyecciones
+-- adentro de Postgres, en una sola ida y vuelta. La cartelera completa pasó
+-- de ser imposible a costar una ronda.
+--
+-- Devuelve una fila CORTA por lanzador, no la proyección completa: treinta
+-- proyecciones enteras (con stats_usadas, ajuste_por_muestra, supuestos y
+-- advertencias cada una) no entran en el contexto del modelo. El detalle se
+-- pide con proyectar_ponches para los pocos que se vayan a jugar.
+--
+-- La lista viene ordenada por ganancia esperada por peso, que es el orden en
+-- que se lee: de lo que más deja a lo que menos.
+--
+-- ============================================================
+-- LO QUE APARECIÓ AL PROBARLA CON LA CARTELERA REAL
+-- ============================================================
+--
+-- La primera corrida sobre los 30 lanzadores dio esto arriba de todo:
+--
+--   Drew Anderson  UNDER 4    66.0%  +15.4¢  CONVIENE
+--   Blade Tidwell  UNDER 3.5  64.0%  +13.2¢  CONVIENE
+--
+-- Los dos únicos CONVIENE de la cartelera, y los dos eran falsos. Los dos
+-- son RELEVISTAS en los datos: Anderson enfrenta ~7.6 bateadores por
+-- aparición, Tidwell ~9.5. Contra esa cantidad de bateadores, un UNDER 4 es
+-- casi seguro — no porque haya ventaja, sino porque una línea de 4 ponches
+-- solo tiene sentido para un abridor. O el nombre abreviado del ticket cayó
+-- en otro lanzador, o el rol cambió y los datos están viejos.
+--
+-- proyectar_ponches ya lo avisaba en `advertencias`. El agujero era de
+-- proyectar_varios: la fila corta llevaba solo la CANTIDAD de avisos, no el
+-- texto, y el orden por valor esperado los ponía primeros. O sea que la
+-- función nueva presentaba los dos peores datos de la cartelera como las dos
+-- mejores apuestas del día.
+--
+-- Ahora se marcan con veredicto REVISAR, se van al fondo pase lo que pase, y
+-- llevan el motivo escrito. Dos reglas, las dos con la misma lógica —que el
+-- número no describa al lanzador que uno cree:
+--
+--   1. La casa puso línea de abridor (>= 3) y los datos dicen relevista.
+--   2. Menos de 5 salidas: la proyección es casi el ancla de la liga.
+--
+-- ============================================================
+-- LA CARTELERA, HONESTA
+-- ============================================================
+--
+-- Con los cuatro desajustes al fondo, de 30 lanzadores no queda NI UN
+-- CONVIENE. Lo mejor es Jacob López UNDER 6 a +3.3¢ (FLOJO) y de ahí para
+-- abajo todo pierde contra el -130. Ese es el resultado real de la noche.
+--
+-- ============================================================
+--
+-- Además, en la Edge Function: MAX_RONDAS 6 -> 9, y si igual se acaban las
+-- rondas ya no se devuelve "me quedé dando vueltas" — se le pide al modelo
+-- una última respuesta con las herramientas apagadas, así contesta con lo
+-- que ya juntó en vez de tirarlo a la basura.
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro.

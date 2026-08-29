@@ -1,0 +1,124 @@
+-- Migración aplicada el 2026-08-28.
+--
+-- ============================================================
+-- LA PEOR FORMA DE ESTAR EQUIVOCADO
+-- ============================================================
+--
+-- Probando el camino de la foto de punta a punta —ticket de Cam Schlittler,
+-- línea 6.5— la app contestó algo perfectamente coherente:
+--
+--   "Schlittler vs BOS, línea 6.5: proyecta 6.83 K → OVER.
+--    Confianza calibrada 50.9%. NO CONVIENE. […] el split de BOS contra
+--    lanzadores zurdos."
+--
+-- Todo cerraba: la tarjeta, el veredicto, el nivel y la explicación decían
+-- lo mismo. Y estaba mal.
+--
+-- Mirando qué le pasó la IA a la calculadora:
+--
+--   buscar_web   { query: "Cam Schlittler pitcher handedness" }
+--   proyectar_ponches { pitcher: "Cam Schlittler", mano_pitcher: "LHP" }
+--
+-- Schlittler es DERECHO. La búsqueda no sacó nada firme y la IA completó el
+-- hueco con una suposición. La calculadora hizo exactamente lo correcto con
+-- un dato falso: usó el split de BOS contra zurdos y devolvió 6.83 K en vez
+-- de 6.92.
+--
+-- Esto es peor que un número mal calculado, porque un número mal calculado
+-- se contradice con algo. Un dato de ENTRADA equivocado no se contradice con
+-- nada: sale limpio por toda la cadena. Solo se ve comparándolo con la
+-- realidad, que es lo que ninguna prueba automática iba a hacer.
+--
+-- ============================================================
+-- LA CAUSA DE FONDO NO ERA LA IA
+-- ============================================================
+--
+-- Era que la mano no estaba en ningún lado. `pitcher_stats_actual` tenía
+-- K%, whiff%, WHIP, IP por salida, si es abridor — pero no con qué mano
+-- lanza. Sin ese dato, cualquiera que necesite la mano tiene que salir a
+-- buscarla, y buscar es adivinar cuando no se encuentra.
+--
+-- Pedirle a la IA que "no adivine" es una regla que se rompe sola. Sacarle
+-- la necesidad de adivinar es un arreglo que se sostiene.
+--
+-- ============================================================
+-- QUÉ SE HIZO
+-- ============================================================
+--
+-- 1. Columna `mano` (R/L) en pitcher_stats_snapshot, expuesta por la vista
+--    pitcher_stats_actual.
+--
+-- 2. Cargada desde la MLB StatsAPI, que la da limpia y sin pelear:
+--
+--      GET statsapi.mlb.com/api/v1/sports/1/players?season=2026
+--          &fields=people,id,fullName,pitchHand,code
+--
+--    Savant no sirvió: su leaderboard acepta `p_throws` como selección pero
+--    devuelve la columna vacía.
+--
+--    823 de 825 lanzadores quedaron con mano. Los dos que faltan son
+--    jugadores de posición que lanzaron una entrada perdida.
+--
+--    El cruce va por nombre normalizado (minúsculas y sin acentos, igual que
+--    buscar_pitcher) y descarta los nombres repetidos en vez de arriesgar:
+--    asignarle la mano equivocada a un homónimo sería el mismo bug con más
+--    pasos. Verificado a mano: Schlittler R, Skubal L, Cease R, Eury Pérez
+--    R, Detmers L — y el acento de Pérez cruzó bien.
+--
+-- 3. proyectar_ponches resuelve la mano sola, desde la base. Lo que llegue
+--    por parámetro solo se usa si la base no la tiene. Si los dos difieren,
+--    gana la base y queda una advertencia.
+--
+--    La función se reescribió sobre su propio texto (pg_get_functiondef +
+--    replace + execute) para no volver a tipear 12 KB de aritmética ya
+--    probada: se tocó la mano y nada más. La firma no cambió, así que
+--    ninguna llamada existente se entera.
+--
+-- ============================================================
+-- COMPROBACIÓN
+-- ============================================================
+--
+--   la IA insiste con LHP  → usa RHP, 6.92 K, y avisa:
+--       "Te pasaron LHP, pero Cam Schlittler lanza con la derecha.
+--        Se usó la mano guardada."
+--   sin decir la mano      → usa RHP, 6.92 K, sin avisos
+--   Skubal (zurdo real)    → usa LHP, 7.60 K
+--
+-- Efecto de paso: ahora TODAS las proyecciones usan el split por mano, que
+-- antes solo se aplicaba si quien llamaba se acordaba de pasarla. Los
+-- números de toda la cartelera se corrigen un poco.
+--
+-- En la Edge Function, además, la herramienta pasó a decir que no se pase ni
+-- se busque la mano, y el prompt lleva el caso escrito con nombre y apellido
+-- para que no se repita.
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro.
+
+-- ============================================================
+-- ADDENDA: dos lints que rompió esta misma migración
+-- ============================================================
+--
+-- Soltar y recrear la vista para agregarle la columna la devolvió con
+-- security_invoker APAGADO, que es el default de Postgres. Una vista
+-- SECURITY DEFINER corre con los permisos de quien la creó y no de quien
+-- consulta, así que se saltea el RLS del que pregunta. Acá los datos son
+-- públicos de la liga, pero dejar una vista definer en `public` es la clase
+-- de descuido que después se copia a una tabla que sí importa.
+--
+--   alter view pitcher_stats_actual set (security_invoker = on);
+--
+-- Y proyectar_varios había quedado sin search_path fijo, cosa que el resto
+-- de las funciones del proyecto sí tienen. Sin eso, quien la llame puede
+-- anteponer un esquema propio y hacer que proyectar_ponches resuelva a otra
+-- función.
+--
+--   alter function proyectar_varios(jsonb, integer, text)
+--     set search_path = public, pg_catalog;
+--
+-- Ojo al comprobar el primero: consultar la vista con `set role
+-- authenticated` a secas devuelve CERO filas y parece que se rompió todo.
+-- No es la vista: la política dice `auth.role() = 'authenticated'`, y sin
+-- las claims del JWT esa función devuelve null. Con las claims puestas
+-- devuelve los 825 lanzadores. El susto es del método de prueba, no del
+-- cambio.

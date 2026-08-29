@@ -1,0 +1,18 @@
+{
+  "name": "strikeoutlab",
+  "private": true,
+  "version": "0.1.0",
+  "description": "StrikeoutLab: sistema determinista de análisis de props de ponches MLB, con Supabase + IA.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspace packages/core",
+    "build": "npm run build --workspace packages/core",
+    "postinstall": "npm run build --workspace packages/core"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,103 @@
+-- Migración aplicada el 2026-08-28. Tres cosas que convierten una proyección
+-- en una decisión de apuesta, más el dato que faltaba para que la regresión a
+-- la media sirviera de algo.
+--
+-- ============================================================
+-- 1. EL ANCLA DEL K% AHORA SALE DE whiff% (Baseball Savant)
+-- ============================================================
+--
+-- La regresión a la media empuja el K% de muestra chica hacia un ancla. Pero
+-- el ancla era el promedio de liga para casi todos, porque el SwStr% de
+-- FanGraphs solo lo teníamos para 55 de 825 lanzadores — y FanGraphs está
+-- detrás de Cloudflare, así que había que pegarlo a mano. Peor: esos 55 son
+-- los de temporada completa, donde el ancla casi no importa.
+--
+-- Savant sí responde por pg_net y da whiff% para 776 lanzadores sin mínimo de
+-- apariciones. Y resultó mejor predictor que el SwStr% de FanGraphs:
+--
+--   whiff% (Savant, 776)     R² = 0.789
+--   SwStr% (FanGraphs, 55)   R² = 0.750
+--
+-- (Se probó derivar SwStr% = whiff% × swing%, que es la definición, pero no
+-- reproduce el número de FanGraphs: 1.17 puntos de error medio, sesgo
+-- sistemático. Como predictor del K%, whiff% solo le gana igual.)
+--
+-- La recta se ajusta SOLO sobre lanzadores con 400+ bateadores enfrentados.
+-- Ajustarla sobre todos la aplana (pendiente 0.76 en vez de 1.02): el ruido
+-- en el whiff% de muestra chica atenúa la pendiente hacia cero, y quedaría
+-- una recta que subestima a los dominantes — justo a quienes más falta les
+-- hace. Con 400+ BF la pendiente ya no se mueve.
+--
+-- Efecto real: Zach Eflin, una sola salida, 41.2% de K% que no se puede
+-- creer. Antes lo aplastábamos contra el 22.1% de liga y quedaba en 25.8%.
+-- Ahora su whiff% de 35.3% dice que sí es ponchador y queda en 34.7%.
+--
+--   anclas_liga()        ahora devuelve las dos rectas y las anclas de liga
+--   ancla_k_pct(w, s)    decide hacia dónde empujar: whiff%, si no SwStr%,
+--                        si no el promedio de liga
+--
+-- ============================================================
+-- 2. VALOR ESPERADO: "¿CONVIENE?" EN VEZ DE "¿QUÉ PROBABILIDAD HAY?"
+-- ============================================================
+--
+-- Al -130 de Star Sport se arriesgan 130 para ganar 100, así que hay que
+-- acertar 130/(130+100) = 56.5% solo para no perder plata. Un pick de 58% es
+-- ganador pero tan flaco que cualquier error del modelo se lo come; uno de
+-- 56% ya pierde, aunque gane más veces de las que pierde.
+--
+--   evaluar_apuesta(prob, cuota, prob_empate)
+--     → probabilidad de equilibrio, ventaja, valor esperado por peso,
+--       fracción de Kelly y veredicto CONVIENE / FLOJO / NO CONVIENE
+--
+-- Kelly va en un cuarto y topado al 5% del bankroll: la fracción completa es
+-- óptima solo si la probabilidad fuera exacta, y la nuestra sale de un
+-- modelo. Kelly completo con una probabilidad sobreestimada es la forma más
+-- rápida conocida de fundirse.
+--
+-- ============================================================
+-- 3. PARLAY HONESTO: CON LA CALIBRACIÓN REAL, NO CON LA DECLARADA
+-- ============================================================
+--
+-- El historial dice 3 aciertos en 13 decididos (más 1 empate) con 81% de
+-- confianza declarada. Bajo un 81% real, sacar 3 de 13 es prácticamente
+-- imposible: la confianza no era real. Multiplicar esas confianzas entre sí
+-- para un parlay daba un número de fantasía.
+--
+--   calibracion_real()   estima la tasa verdadera con el mismo Bayes empírico
+--                        del K%: mezcla lo observado con un previo según el
+--                        tamaño de muestra, y devuelve el factor de
+--                        compresión hacia el 50%. Con 13 picks avisa que es
+--                        preliminar. Se corrige sola al cargar resultados.
+--
+--   evaluar_parlay(...)  la escalera de 1 a 12 patas: probabilidad, valor
+--                        esperado, con cuánto terminás (mediana Y promedio) y
+--                        probabilidad de fundirte.
+--
+-- No hace falta simular. Apostando siempre la misma fracción f, después de N
+-- apuestas con k aciertos el bankroll es B0·(1+f·pago)^k·(1−f)^(N−k). El
+-- orden no importa (multiplicar conmuta), así que todo depende de k, que es
+-- binomial(N, prob). De ahí salen mediana, promedio (por la función
+-- generadora) y ruina (por la acumulada) en forma cerrada y exacta.
+--
+-- La escalera se mide con apuesta FIJA, no con Kelly: con Kelly la fracción
+-- se achica sola cuando la ventaja es chica y el riesgo de fundirse daba 0 en
+-- todas las filas, o sea que la tabla no decía nada. Nadie apuesta así en una
+-- banca física.
+--
+-- Lo que la tabla deja ver, y es el punto entero:
+--
+--   patas  probabilidad  valor esperado  terminás con  te fundís
+--     2       34.5%          +0.08          1.23×          1%
+--     6        4.1%          +0.26          0.28×         41%
+--    12        0.2%          +0.59          0.006×        84%
+--
+-- El valor esperado SUBE con cada pata y aun así te funde. No es
+-- contradicción: el promedio lo inflan unos pocos aciertos de lotería que no
+-- te van a tocar. Por eso la recomendación usa la MEDIANA.
+--
+-- ============================================================
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro. La versión en TypeScript de la misma matemática, con sus pruebas
+-- —incluidas 8 que comparan contra los números que devolvió Postgres— está en
+-- packages/core/src/apuesta.ts y packages/core/src/proyeccion.ts.
