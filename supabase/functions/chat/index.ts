@@ -208,7 +208,11 @@ const HERRAMIENTAS = [
               type: "object",
               properties: {
                 pitcher: { type: "string", description: "Nombre del lanzador, aunque venga abreviado" },
-                linea: { type: "number", description: "Línea de ponches de la casa, ej. 6.5" },
+                linea: {
+                  type: "number",
+                  description:
+                    "Línea de ponches de la casa. OMITILA si la casa todavía no la puso: igual se proyectan los ponches y la fila sale con veredicto SIN LINEA.",
+                },
                 rival: { type: "string", description: "Abreviación del equipo contrario, ej. NYY, CIN" },
                 mano: {
                   type: "string",
@@ -218,7 +222,7 @@ const HERRAMIENTAS = [
                 ventana_rival: { type: "string", enum: ["TEMPORADA", "ULTIMOS_14"] },
                 cuota: { type: "number", description: "Solo si esta línea tiene una cuota distinta" },
               },
-              required: ["pitcher", "linea"],
+              required: ["pitcher"],
             },
           },
           cuota: {
@@ -227,6 +231,38 @@ const HERRAMIENTAS = [
           },
         },
         required: ["juegos"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cartelera_de_hoy",
+      description:
+        "LOS JUEGOS DEL DÍA CON SUS ABRIDORES, del calendario oficial de la MLB, y las proyecciones de todos ya hechas. Usala SIEMPRE que falte saber contra quién lanza alguien, quién abre hoy, o cuando la casa todavía no puso las líneas. NUNCA le preguntes al usuario el rival de un lanzador: está acá. NUNCA digas que no tenés datos para proyectar sin línea: los ponches proyectados salen igual y esta herramienta te los da.",
+      parameters: {
+        type: "object",
+        properties: {
+          fecha: { type: "string", description: "YYYY-MM-DD. Si no se pasa, hoy." },
+          solo: {
+            type: "array",
+            items: { type: "string" },
+            description: "Opcional: apellidos a filtrar, si solo interesan algunos.",
+          },
+          lineas: {
+            type: "array",
+            description:
+              "Las líneas que la casa YA puso, si tenés alguna. Pasá solo el lanzador y su línea: el rival lo resuelve esta herramienta desde el calendario oficial. NO escribas vos el rival.",
+            items: {
+              type: "object",
+              properties: {
+                pitcher: { type: "string" },
+                linea: { type: "number" },
+              },
+              required: ["pitcher", "linea"],
+            },
+          },
+        },
       },
     },
   },
@@ -440,6 +476,94 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
       return data;
     }
 
+    case "cartelera_de_hoy": {
+      const fecha = args.fecha ?? new Date().toISOString().slice(0, 10);
+      const url =
+        `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${fecha}` +
+        `&hydrate=probablePitcher,team` +
+        `&fields=dates,games,gameDate,teams,away,home,team,abbreviation,probablePitcher,fullName`;
+      let juegos: Array<Record<string, unknown>> = [];
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) return { error: `El calendario de la MLB respondió ${resp.status}.` };
+        const datos = await resp.json();
+        for (const d of datos?.dates ?? []) {
+          for (const g of d?.games ?? []) {
+            const v = g?.teams?.away, l = g?.teams?.home;
+            juegos.push({
+              hora: g?.gameDate,
+              visitante: v?.team?.abbreviation ?? null,
+              local: l?.team?.abbreviation ?? null,
+              abridor_visitante: v?.probablePitcher?.fullName ?? null,
+              abridor_local: l?.probablePitcher?.fullName ?? null,
+            });
+          }
+        }
+      } catch (e) {
+        return { error: `No pude leer el calendario: ${(e as Error).message}` };
+      }
+
+      // Cada abridor con su rival, que es el otro equipo de su propio juego.
+      // Esto es justamente lo que la IA no tenía y por eso preguntaba.
+      const paraProyectar: Array<{ pitcher: string; rival: string }> = [];
+      for (const j of juegos) {
+        if (j.abridor_visitante) {
+          paraProyectar.push({ pitcher: j.abridor_visitante as string, rival: j.local as string });
+        }
+        if (j.abridor_local) {
+          paraProyectar.push({ pitcher: j.abridor_local as string, rival: j.visitante as string });
+        }
+      }
+
+      // Las líneas se pegan por apellido contra el abridor del calendario. El
+      // rival sale SIEMPRE de acá, nunca de lo que haya escrito el modelo:
+      // ya pasó que copió "LAD" como rival de Skubal, que es de LAD.
+      const lineas = (args.lineas ?? []) as Array<{ pitcher: string; linea: number }>;
+      const conLinea = new Map<string, number>();
+      const sinPegar: string[] = [];
+      for (const l of lineas) {
+        const buscado = String(l.pitcher ?? "").toLowerCase().trim();
+        if (!buscado) continue;
+        const apellido = buscado.split(/\s+/).pop() ?? buscado;
+        const encontrado = paraProyectar.find((p) => {
+          const nombre = p.pitcher.toLowerCase();
+          return nombre.includes(buscado) || nombre.split(/\s+/).pop() === apellido;
+        });
+        if (encontrado) conLinea.set(encontrado.pitcher, l.linea);
+        else sinPegar.push(l.pitcher);
+      }
+
+      const filtro = (args.solo ?? []) as string[];
+      let elegidos: Array<{ pitcher: string; rival: string; linea?: number }> = paraProyectar;
+      if (filtro.length) {
+        elegidos = elegidos.filter((p) =>
+          filtro.some((f) => p.pitcher.toLowerCase().includes(String(f).toLowerCase())));
+      }
+      elegidos = elegidos.map((p) =>
+        conLinea.has(p.pitcher) ? { ...p, linea: conLinea.get(p.pitcher) } : p);
+
+      if (elegidos.length === 0) {
+        return { fecha, juegos, mensaje: "El calendario todavía no tiene abridores anunciados." };
+      }
+
+      const { data, error } = await supabase.rpc("proyectar_varios", {
+        p_juegos: elegidos,
+        p_cuota: args.cuota ?? -130,
+        p_sistema: SISTEMA_ACTUAL,
+      });
+      if (error) return { fecha, juegos, error: error.message };
+      return {
+        fecha,
+        cantidad_juegos: juegos.length,
+        juegos,
+        lineas_sin_pegar: sinPegar,
+        proyecciones: data,
+        como_leer:
+          "El rival de cada uno sale del calendario oficial: usalo tal cual, no lo reescribas. " +
+          "Si algo quedó en lineas_sin_pegar es que ese lanzador no figura abriendo hoy — decilo.",
+      };
+    }
+
     case "buscar_pitcher": {
       const { data, error } = await supabase.rpc("buscar_pitcher", {
         texto_busqueda: args.nombre ?? "",
@@ -606,10 +730,23 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
 
 const SISTEMA = `Sos el analista de StrikeoutLab, la app personal de Gianlouis para apostar props de ponches de lanzadores de MLB en Star Sport (banca física dominicana). Hablás español dominicano, directo y sin vueltas.
 
+REGLA NÚMERO UNO — ACTUÁ, NO PREGUNTES:
+Antes de preguntar CUALQUIER cosa, tenés que haber llamado a las herramientas. Preguntar sin haber llamado a nada es la peor respuesta posible: le devolvés el trabajo al que te lo pidió.
+
+Tres cosas que NUNCA se preguntan, porque ya las tenés:
+1. **Contra quién lanza alguien.** Está en "cartelera_de_hoy", que trae el calendario oficial de la MLB con los abridores del día y el rival de cada uno. Llamala. Y si el usuario te da líneas sueltas, pasáselas a ESA herramienta en el campo "lineas" (solo lanzador y número): ella les pega el rival correcto. NUNCA copies un rival a mano a "proyectar_varios" — ya pasó que copiaste "LAD" como rival de Skubal, que es de LAD, y la tabla salió perfecta con el dato equivocado.
+2. **Con qué mano lanza.** Está en la base, y la calculadora la usa sola.
+3. **Las estadísticas de cualquier lanzador.** Hay 825 cargados. "proyectar_ponches" y "proyectar_varios" los buscan solos con el nombre, aunque venga abreviado.
+
+Y NUNCA, bajo ninguna circunstancia, digas que "no tenés suficientes datos" o que "te falta información" para proyectar. Si tenés el nombre del lanzador, tenés todo. Si además falta la línea porque la casa todavía no la puso, se proyectan los ponches igual y se dice cuántos son: eso es exactamente lo que sirve para saber de qué lado va a caer cuando salga.
+
+Solo preguntás DESPUÉS de haber dado un resultado, y solo si queda algo genuinamente indecidible (dos lanzadores con el mismo apellido en el mismo juego, una cuota rara en el ticket). Una pregunta, al final, después del número.
+
 CÓMO TRABAJÁS:
 - El usuario te manda fotos (tickets, boxscores, capturas de estadísticas) o te escribe. Vos hacés TODO: leés, buscás los datos, calculás y respondés. Nunca le pidas que llene campos ni que repita datos que ya están en la foto o en la base.
 - Para cualquier apuesta llamá SIEMPRE a "proyectar_ponches". Esa herramienta busca sola las estadísticas y devuelve los K proyectados, el lado y la confianza. Ese número es aritmética exacta: usalo tal cual, nunca lo recalcules ni lo ajustes de cabeza. Vos no sos bueno con números; la calculadora sí.
 - **Si te mandan más de dos lanzadores de una vez** —una cartelera, una tabla, la pizarra del día— usá "proyectar_varios" y metelos TODOS en UNA sola llamada. No los vayas proyectando de a uno: tenés un tope de rondas y se te acaba a mitad de camino, y él se queda sin respuesta habiendo mandado todo. En una tabla con dos equipos y dos lanzadores por fila, el primer lanzador es del primer equipo y el segundo del segundo; el rival de cada uno es el otro equipo de su fila. Poné siempre el rival: es lo que distingue dos lanzadores con el mismo apellido.
+- Si la casa todavía no puso las líneas, llamá igual a "proyectar_varios" (o a "cartelera_de_hoy") SIN el campo linea. Devuelve los ponches proyectados de cada uno con veredicto SIN LINEA. Mostralos: es lo que le permite tener la opinión lista antes de que la casa abra.
 - Lo que "proyectar_varios" devuelve con veredicto REVISAR NO se recomienda ni entra en un parlay, aunque tenga la ganancia esperada más alta de la lista. Justamente cuando un dato no cierra es cuando el número se ve mejor. Leé el campo "revisar", decilo en una línea y preguntá lo que haga falta para destrabarlo.
 - Si la foto es de un juego YA TERMINADO (boxscore con resultados), guardá esa salida con "guardar_salida" sin que te lo pidan, y después contá qué guardaste. Así se alimenta el historial real.
 - Si es un ticket o una línea de un juego que todavía no se juega, proyectá y dale tu recomendación.
@@ -628,7 +765,15 @@ CÓMO RESPONDÉS:
 - Si la calculadora devuelve advertencias (muestra chica, empate probable, nombre ambiguo, faltan datos), decilas. No las escondas.
 - Cuando "ajuste_por_muestra" muestre que el K% ajustado quedó lejos del crudo, citá SIEMPRE el ajustado y explicá por qué en una línea: con pocos bateadores enfrentados el número crudo es suerte, no habilidad. Nunca digas el K% crudo como si fuera la tasa real del lanzador.
 - Si algo no se puede saber, decilo claro. Nunca inventes una estadística ni un lineup.
-- Nada de tablas gigantes ni respuestas de tres pantallas: es una app de celular, andá al grano.
+- **DE TRES LANZADORES PARA ARRIBA, LA RESPUESTA VA EN TABLA.** Siempre. Un párrafo por lanzador es ilegible en un celular y es justo lo que no sirve. Tabla de markdown, columnas cortas, lo mejor arriba:
+
+| Lanzador | Rival | Línea | Proy | Lado | Conf | ¢/peso | Veredicto |
+|---|---|---|---|---|---|---|---|
+| Cease (TOR) | SEA | 8 | 8.87 | OVER | 54.6% | −3.0 | NO CONVIENE |
+| Skubal (LAD) | DET | — | 7.60 | — | — | — | SIN LÍNEA |
+
+Con línea: llená todo. Sin línea: guion en las columnas que no aplican y "SIN LÍNEA" en veredicto — la fila NO se omite, los ponches proyectados son el dato. Debajo de la tabla, dos o tres renglones con la conclusión y lo que haya que revisar. Nada más.
+- Para uno o dos lanzadores, prosa corta: es una app de celular, andá al grano.
 
 NO TE QUEDES CALLADO — ESTA ES LA PARTE QUE MÁS IMPORTA:
 Gianlouis te da la información y vos hacés el trabajo, pero eso no es contestar y callarte. Después de dar el resultado, SIEMPRE seguís la conversación con algo útil, y la seguís hasta que él diga que ya está. Cerrá cada respuesta con una sugerencia concreta o una pregunta, nunca con un punto final seco.
@@ -636,7 +781,7 @@ Gianlouis te da la información y vos hacés el trabajo, pero eso no es contesta
 Qué ofrecer, según el caso:
 - **Si recomendás menos patas de las que él quiere**, no te limites a decir que no. Ofrecé la salida de dos tickets: "la escalera dice que lo óptimo son 3 patas — armá ese, que es el que la matemática banca, y si querés jugar más, hacé un segundo ticket aparte con las que vos elijas y jugalo con menos plata. Así el bueno no se contamina con el arriesgado." Y decile cuáles son las patas más seguras y cuáles las que él estaría metiendo por gusto.
 - **Si un pick queda FLOJO o NO CONVIENE**, ofrecé alternativas: otro lanzador del mismo día, la línea del otro lado, o esperar. Preguntale si quiere que revises los demás juegos de la fecha.
-- **Si falta un dato** (rival, mano del lanzador, cuota distinta, si la línea es entera o con medio punto), preguntalo directo en una línea. Una pregunta a la vez, no un cuestionario.
+- **Si falta un dato, PRIMERO buscalo.** El rival sale de "cartelera_de_hoy"; las estadísticas y la mano, de la calculadora; el lineup confirmado o una lesión, de "buscar_web". Recién si después de buscar sigue sin poder decidirse, preguntá — una sola cosa, al final, después de haber dado el número que sí pudiste dar.
 - **Si el resultado depende de un supuesto** (lineup no confirmado, lanzador con muestra chica, cambio de equipo), decilo y ofrecé buscarlo en la web.
 - **Si el pick es bueno**, ofrecé guardarlo, o preguntá si quiere que le busques con qué combinarlo.
 - **Si él insiste en algo que la matemática no banca** (12 patas, un pick de 56%), no discutas dos veces: dijiste tu parte, ahora dale lo que pide bien hecho — el número real de esa jugada, cuánto arriesgar para que no lo funda, y qué versión más segura tiene al lado.
