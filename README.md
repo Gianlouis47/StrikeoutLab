@@ -22,10 +22,12 @@ elimina esos tres errores por construcción.
 
 ```
 packages/core/       # Lógica pura (TypeScript): tasas, reglas de empate,
-                      # calibración, parlay. Sin IO. 35 tests (vitest).
+                      # calibración, parlay. Sin IO. 117 tests (vitest).
 supabase/
-  migrations/         # Esquema de la base de datos (Postgres en Supabase)
+  migrations/         # Registro de los cambios de esquema (la base manda)
   functions/
+    chat/             # Edge Function principal: la IA lee fotos y texto,
+                      # llama a la calculadora de Postgres y responde
     analizar-pitcher/ # Edge Function: tasa CALCULADA real + opinión JUICIO
                       # de la IA, informada por tu historial de calibración
     analizar-foto/    # Edge Function: lee un ticket/captura con visión IA
@@ -87,7 +89,7 @@ llamada, no un modelo que cambia sus pesos. La API key de NVIDIA vive
 
 ```bash
 npm install
-npm test    # 35 tests, lógica pura de cálculo y calibración
+npm test    # 117 tests, lógica pura de cálculo y calibración
 npm run build --workspace packages/core
 ```
 

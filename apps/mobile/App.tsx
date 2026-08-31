@@ -9,6 +9,7 @@ import { confirmarAccion } from "./lib/confirmacion";
 import type { DatosExtraidosFoto } from "./lib/edgeFunctions";
 import { supabase } from "./lib/supabase";
 import AnalizarFotoScreen from "./screens/AnalizarFotoScreen";
+import BuscarLanzadorScreen from "./screens/BuscarLanzadorScreen";
 import ChatScreen from "./screens/ChatScreen";
 import DashboardScreen from "./screens/DashboardScreen";
 import HistorialScreen from "./screens/HistorialScreen";
@@ -23,12 +24,13 @@ import RivalesScreen from "./screens/RivalesScreen";
 // detrás de "Más" en vez de competir por espacio en la barra.
 const PESTANAS_PRINCIPALES = [
   { id: "chat", titulo: "Análisis", icono: "chatbubbles" },
+  { id: "buscar", titulo: "Lanzador", icono: "search" },
   { id: "historial", titulo: "Historial", icono: "time" },
-  { id: "dashboard", titulo: "Calibración", icono: "stats-chart" },
   { id: "mas", titulo: "Más", icono: "ellipsis-horizontal" },
 ] as const satisfies ReadonlyArray<{ id: string; titulo: string; icono: keyof typeof Ionicons.glyphMap }>;
 
 const PESTANAS_SECUNDARIAS = [
+  { id: "dashboard", titulo: "Calibración", icono: "stats-chart" },
   { id: "nuevoPick", titulo: "Pick manual", icono: "add-circle" },
   { id: "salida", titulo: "Salida manual", icono: "baseball" },
   { id: "foto", titulo: "Foto suelta", icono: "camera" },
@@ -133,6 +135,9 @@ function Contenido() {
       <View style={{ flex: 1 }}>
         <Pestana activa={pestana === "chat"} visitada={visitadas.has("chat")}>
           <ChatScreen />
+        </Pestana>
+        <Pestana activa={pestana === "buscar"} visitada={visitadas.has("buscar")}>
+          <BuscarLanzadorScreen />
         </Pestana>
         <Pestana activa={pestana === "dashboard"} visitada={visitadas.has("dashboard")}>
           <DashboardScreen />

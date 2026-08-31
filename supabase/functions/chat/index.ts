@@ -79,6 +79,21 @@ const MODELOS_RAZONAMIENTO = (Deno.env.get("NVIDIA_MODELOS_TEXTO") ??
 // rival, armar el parlay, guardar).
 const MAX_RONDAS = 9;
 
+/**
+ * Cuánto se puede pasar juntando datos antes de tener que contestar.
+ *
+ * El tope de rondas solo cuenta vueltas, y una vuelta puede tardar 5 segundos
+ * o 40. Medido contra la función ya desplegada: "Skubal 6.5, decime la
+ * temporada, las últimas 5, cómo le va de visita, y si conviene" hizo cuatro
+ * vueltas y pasó los 120 segundos — del lado del usuario eso no es "tardó",
+ * es un error en la pantalla, que es exactamente lo que él viene reportando.
+ *
+ * Con esto, pasado el presupuesto se corta de llamar herramientas y se pide la
+ * respuesta con lo que ya está juntado. Vale más una respuesta con tres de las
+ * cuatro cosas que un error con las cuatro a medio hacer.
+ */
+const TOPE_MS_HERRAMIENTAS = 85000;
+
 /** Qué versión del sistema produce las confianzas de hoy. Ver picks.sistema. */
 const SISTEMA_ACTUAL = "PROYECCION";
 
@@ -284,12 +299,30 @@ const HERRAMIENTAS = [
     function: {
       name: "historial_pitcher",
       description:
-        "Devuelve las salidas reales ya registradas de un lanzador (fecha, rival, IP, K, BB) y, si le pasás una línea, cuántas veces la superó. Esto es historial contado, no proyección.",
+        "Las salidas reales ya jugadas de un lanzador (fecha, rival, IP, K, BB, casa o visita) con filtros: temporada completa, últimas 5, últimas 10, solo en casa, solo de visita, o head-to-head contra un rival. Si le pasás la línea devuelve además cuántas veces la pasó, la racha, el promedio y la mediana. OJO: esto es CONTAR lo que ya pasó, no la probabilidad de que pase hoy — para eso está proyectar_ponches. Sirve para el contexto de al lado: rachas, si el rival lo domina, si un juego enorme le infla el promedio.",
       parameters: {
         type: "object",
         properties: {
           pitcher: { type: "string" },
-          linea: { type: "number", description: "Opcional: para contar cuántas veces la superó" },
+          linea: { type: "number", description: "Opcional: para contar cuántas veces la pasó" },
+          ventanas: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["TEMPORADA", "ULTIMAS_5", "ULTIMAS_10", "CASA", "VISITA", "H2H"],
+            },
+            description:
+              "PEDÍ TODAS LAS QUE NECESITES DE UNA VEZ, en esta lista. Si te preguntan por la temporada, las últimas 5 y cómo le va de visita, mandá las tres acá en UNA sola llamada — no hagas tres llamadas seguidas, que se te va el tiempo y el usuario se queda sin respuesta. Por defecto TEMPORADA.",
+          },
+          ventana: {
+            type: "string",
+            enum: ["TEMPORADA", "ULTIMAS_5", "ULTIMAS_10", "CASA", "VISITA", "H2H"],
+            description: "Una sola ventana, si con eso alcanza. Si necesitás varias usá 'ventanas'.",
+          },
+          rival: {
+            type: "string",
+            description: "Abreviatura del equipo rival. Obligatorio si pedís la ventana H2H.",
+          },
         },
         required: ["pitcher"],
       },
@@ -311,6 +344,11 @@ const HERRAMIENTAS = [
           k: { type: "number" },
           bb: { type: "number" },
           pitcheos: { type: "number" },
+          es_local: {
+            type: "boolean",
+            description:
+              "true si lanzó en su estadio, false si fue de visita. Mandalo siempre que el boxscore lo diga: es lo que después permite filtrar casa/visita.",
+          },
         },
         required: ["pitcher", "fecha", "rival", "ip", "k", "bb"],
       },
@@ -576,52 +614,51 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
     }
 
     case "historial_pitcher": {
-      const pitcher = await nombreReal(supabase, args.pitcher);
-      const { data, error } = await supabase
-        .from("game_logs")
-        .select("fecha, rival, ip, k, bb, pitcheos")
-        .eq("pitcher", pitcher)
-        .order("fecha", { ascending: false })
-        .limit(20);
-      if (error) return { error: error.message };
+      // El conteo lo hace la base, no acá.
+      //
+      // Antes esto traía las filas y contaba en TypeScript. La pantalla de
+      // Buscar Lanzador cuenta lo mismo llamando a historial_lanzador, y dos
+      // implementaciones del mismo conteo terminan dando números distintos
+      // para el mismo lanzador — el día que pase, el usuario no va a saber a
+      // cuál creerle. Una sola función, los dos la llaman.
+      //
+      // Las ventanas van en paralelo y en una sola llamada de herramienta.
+      // Pedirlas de a una era una vuelta al modelo por cada una, y con eso
+      // "temporada + últimas 5 + de visita" se pasaba de los 120 segundos.
+      const pedidas: string[] = Array.isArray(args.ventanas) && args.ventanas.length > 0
+        ? args.ventanas.map((v: unknown) => String(v))
+        : [args.ventana ?? "TEMPORADA"];
+      const ventanas = [...new Set(pedidas)].slice(0, 6);
 
-      const salidas = data ?? [];
-      if (salidas.length === 0) {
-        return {
-          pitcher,
-          salidas_registradas: 0,
-          mensaje: "No hay salidas registradas todavía. Se agregan con guardar_salida.",
-        };
-      }
-      let conteo = null;
-      if (args.linea !== undefined && args.linea !== null) {
-        const linea = Number(args.linea);
-        const arriba = salidas.filter((s: any) => Number(s.k) > linea).length;
-        const empates = Number.isInteger(linea)
-          ? salidas.filter((s: any) => Number(s.k) === linea).length
-          : 0;
-        conteo = {
-          linea,
-          veces_por_encima: arriba,
-          veces_por_debajo: salidas.length - arriba - empates,
-          empates,
-          total: salidas.length,
-          advertencia: salidas.length < 5 ? "Menos de 5 salidas: no es confiable todavía." : null,
-        };
-      }
-      return { pitcher, salidas_registradas: salidas.length, salidas, conteo_contra_linea: conteo };
+      const resultados = await Promise.all(
+        ventanas.map(async (v) => {
+          const { data, error } = await supabase.rpc("historial_lanzador", {
+            p_pitcher: args.pitcher ?? "",
+            p_linea: args.linea ?? null,
+            p_ventana: v,
+            p_rival: args.rival ?? null,
+          });
+          return [v, error ? { error: error.message } : data] as const;
+        }),
+      );
+
+      if (resultados.length === 1) return resultados[0][1];
+      return Object.fromEntries(resultados);
     }
 
     case "guardar_salida": {
       const pitcher = await nombreReal(supabase, args.pitcher);
+      // El rival va tal cual: un trigger de la tabla lo pasa a la abreviatura
+      // canónica, sepa el modelo escribirla o no ("AZ", "OAK", "Rockies").
       const { error } = await supabase.from("game_logs").insert({
         pitcher,
         fecha: args.fecha,
-        rival: String(args.rival).toUpperCase(),
+        rival: String(args.rival ?? ""),
         ip: args.ip,
         k: args.k,
         bb: args.bb,
         pitcheos: args.pitcheos ?? null,
+        es_local: typeof args.es_local === "boolean" ? args.es_local : null,
       });
       if (error) return { guardado: false, error: error.message };
       return { guardado: true, pitcher, mensaje: `Salida de ${pitcher} del ${args.fecha} guardada.` };
@@ -755,6 +792,9 @@ CÓMO TRABAJÁS:
 - Si el ticket tiene una cuota distinta de -130, volvé a llamar a "proyectar_ponches" pasándole esa cuota, no calcules aparte.
 - NUNCA busques ni adivines con qué mano lanza alguien, y NUNCA pases "mano_pitcher". La base ya la tiene para 823 lanzadores y la calculadora la usa sola. Esto es una regla dura porque ya pasó: buscaste en la web la mano de Cam Schlittler, no la sacaste, pasaste LHP para un DERECHO, y salió una proyección coherente con la mano equivocada. Un dato de entrada falso no se ve en la tarjeta.
 - Para cualquier combinada, llamá a "evaluar_parlay". Nunca multipliques confianzas de cabeza ni digas "las dos al 85% dan 85%".
+- Hay historial real cargado: 3.658 salidas de 224 abridores, temporada completa. Cuando pregunte "¿cómo viene?", "¿cuántas veces la pasó?", "¿cómo le va contra ese equipo?", "¿en casa o de visita?", llamá a "historial_pitcher". No digas nunca que no hay historial sin haberlo llamado.
+- Si te piden varias ventanas del historial (la temporada Y las últimas 5 Y de visita), pedilas TODAS JUNTAS en el campo "ventanas" de UNA sola llamada. Tres llamadas seguidas son tres vueltas, se pasa del tiempo y el usuario ve un error en vez de la respuesta. Lo mismo vale en general: agrupá, no vayas de a uno.
+- El historial y la proyección NO son lo mismo y no se mezclan. "7 de 10 (70%)" es contar lo que ya pasó: no sabe contra quién lanza hoy, no corrige por muestra chica y no sabe que al -130 hay que acertar 56.5% para no perder. La probabilidad que se apuesta es la de "proyectar_ponches". Si citás la tasa histórica, decí de una que es historial, y no la uses jamás como si fuera la probabilidad de hoy.
 
 CÓMO RESPONDÉS:
 - Empezá por el resultado, no por el proceso: "deGrom vs CIN, línea 7: proyecta 7.9 K → OVER. Al -130 eso CONVIENE: 9.7 centavos de ganancia por peso."
@@ -904,8 +944,18 @@ Deno.serve(async (req: Request) => {
     throw new Error(`Ningún modelo pudo responder. Último problema: ${ultimoError}`);
   }
 
+  const arranque = Date.now();
+  let seCortoPorTiempo = false;
+
   try {
     for (let ronda = 0; ronda < MAX_RONDAS; ronda++) {
+      // El presupuesto se mira ANTES de pedir otra vuelta: si ya casi no
+      // queda tiempo, arrancar una vuelta más garantiza el timeout en vez de
+      // evitarlo.
+      if (ronda > 0 && Date.now() - arranque > TOPE_MS_HERRAMIENTAS) {
+        seCortoPorTiempo = true;
+        break;
+      }
       const datos = await pedirAlModelo();
       const mensaje = datos?.choices?.[0]?.message as NvidiaMensaje | undefined;
       if (!mensaje) throw new Error("El modelo devolvió una respuesta sin mensaje.");
@@ -942,10 +992,14 @@ Deno.serve(async (req: Request) => {
     if (!respuestaFinal) {
       mensajes.push({
         role: "user",
-        content:
-          "Se acabó el tiempo de buscar datos. Contestá ahora con lo que ya tenés, " +
-          "sin llamar más herramientas. Si te faltaron lanzadores, decí cuáles quedaron " +
-          "afuera y ofrecé seguir con esos.",
+        content: seCortoPorTiempo
+          ? "Se acabó el tiempo de buscar datos. Contestá AHORA con lo que ya juntaste, " +
+            "sin llamar más herramientas. Dale al usuario todo lo que sí tenés — no le " +
+            "devuelvas una disculpa. Al final, en un renglón, decí qué quedó sin mirar y " +
+            "ofrecé seguir con eso."
+          : "Se acabó el tiempo de buscar datos. Contestá ahora con lo que ya tenés, " +
+            "sin llamar más herramientas. Si te faltaron lanzadores, decí cuáles quedaron " +
+            "afuera y ofrecé seguir con esos.",
       });
       try {
         const datos = await pedirAlModelo(false);

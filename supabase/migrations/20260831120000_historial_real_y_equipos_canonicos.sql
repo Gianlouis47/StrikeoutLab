@@ -1,0 +1,114 @@
+-- Migración aplicada el 2026-08-31.
+--
+-- ============================================================
+-- EL HISTORIAL DE VERDAD
+-- ============================================================
+--
+-- Hasta hoy game_logs tenía 31 filas. Con eso no se dibuja un gráfico de
+-- barras ni se contesta "¿cuántas veces la pasó?". Se cargó la temporada
+-- completa desde la API oficial de la MLB, por lanzador:
+--
+--   GET statsapi.mlb.com/api/v1/people/{mlb_id}/stats
+--       ?stats=gameLog&group=pitching&season=2026&gameType=R
+--       &fields=stats,splits,date,isHome,opponent,id,game,gamePk,stat,
+--               inningsPitched,strikeOuts,baseOnBalls,numberOfPitches,gamesStarted
+--
+-- 224 pedidos por pg_net, los 224 con 200. Filtrando a gamesStarted = 1:
+-- **3.658 salidas de 224 abridores**, del 25 de marzo al 30 de agosto.
+--
+-- Dos cosas que costaron una vuelta entera:
+--
+-- 1. `fields` CORTA LO QUE NO NOMBRÁS, INCLUIDO LO ANIDADO. La primera carga
+--    trajo `"opponent": {}` en todas las salidas: había pedido `opponent`
+--    pero no `id`, y sin el id adentro el objeto llega vacío. Hubo que
+--    redisparar los 224.
+--
+-- 2. LAS 12 FILAS VIEJAS ERAN PROYECCIONES, NO RESULTADOS. Todas del
+--    2026-08-25, todas con el rival escrito como nombre largo ("Rockies",
+--    "Diamondbacks") en vez de abreviatura. Contra la API: Dylan Cease NO
+--    lanzó el 25 de agosto — lanzó el 16, el 22 y el 28. Eran la cartelera
+--    de ese día anotada como si ya hubiera pasado, y `historial_lanzador`
+--    las iba a contar como barras verdes de juegos que nunca existieron.
+--    Se borraron. Las otras 19 filas viejas sí eran reales y coincidían con
+--    la API por (pitcher, fecha); ganó la versión oficial.
+--
+-- ============================================================
+-- AZ NO ES ARI, Y ESO ERA UN BUG
+-- ============================================================
+--
+-- La MLB devuelve `AZ` para Arizona y `CWS` para los Medias Blancas.
+-- team_k y equipo_stats_split los tienen como `ARI` y `CHW`. Nadie
+-- traducía. O sea: cualquier juego de esos dos equipos que entrara por
+-- `cartelera_de_hoy` no encontraba al rival, y la proyección seguía como si
+-- fuera un equipo promedio.
+--
+-- Ahora hay `equipos_mlb` (id de la MLB -> abreviatura canónica),
+-- `equipos_alias` (AZ, CWS, OAK, SDP, TBR, WSN, ... -> la canónica) y
+-- `normalizar_equipo(text)`, que usan proyectar_ponches e
+-- historial_lanzador. Un trigger en game_logs normaliza el rival al
+-- guardar, así no importa si la fila la escribe la carga masiva, la IA
+-- leyendo un boxscore, o la pantalla manual.
+--
+-- ============================================================
+-- LA VENTANA DEL RIVAL ERA UNA CONDICIÓN Y DEBÍA SER UNA PREFERENCIA
+-- ============================================================
+--
+-- proyectar_ponches buscaba el K% del rival con `ventana = p_ventana_rival`
+-- a secas. Si p_ventana_rival venía nulo — o pedía una ventana que ese
+-- equipo no tiene cargada — la comparación nunca daba cierto, no encontraba
+-- nada, y la proyección continuaba tratando al rival como promedio de liga.
+-- El dato que más mueve la aguja después del lanzador se caía en silencio.
+--
+-- Medido: Skubal línea 6.5 da **7.42 K** contra "equipo promedio" y
+-- **6.08 K** con el split real de ARI vs zurdos. Uno es OVER y el otro es
+-- UNDER. No es un detalle.
+--
+-- Ahora se prefiere la ventana pedida, y si no está se usa la que haya
+-- diciendo cuál se usó. Y cuando el rival no se resuelve, el aviso ya no va
+-- en `supuestos` (que el prompt no obliga a citar) sino en `advertencias`
+-- (que sí).
+--
+-- ============================================================
+-- LOS INNINGS DE LA MLB NO SON DECIMALES
+-- ============================================================
+--
+-- "6.2" es seis innings y dos outs = 6.667, no seis con dos décimas.
+-- Promediarlos como números normales da de menos, y el error crece con las
+-- salidas largas. `ip_a_outs` / `outs_a_ip` los pasan a outs, promedian ahí
+-- y devuelven las dos formas: la de la libreta (6.1) y la de la calculadora
+-- (6.10).
+--
+-- ============================================================
+-- QUÉ QUEDÓ APLICADO
+-- ============================================================
+--
+--   equipos_mlb, equipos_alias        tablas nuevas, con RLS y lectura para
+--                                     authenticated
+--   normalizar_equipo(text)           abreviatura canónica; si no reconoce,
+--                                     devuelve el texto en mayúsculas para
+--                                     que el error se vea en vez de volverse
+--                                     un null silencioso
+--   game_logs_normaliza_rival()       trigger BEFORE INSERT/UPDATE
+--   ip_a_outs / outs_a_ip             conversión de innings
+--   historial_lanzador(...)           v2: rival normalizado, IP promediada
+--                                     en outs, mediana, máximo, mínimo y
+--                                     racha. Sin tabla temporal — una
+--                                     función STABLE que hace DDL revienta
+--                                     en cuanto la llame un GET de PostgREST
+--   buscar_pitcher(text)              devuelve `mano` al final (la pantalla
+--                                     la necesita y ya venía en la fila)
+--   equipos_lista()                   los 30, para el selector de rival
+--   abridores_destacados(int)         con qué llenar la pantalla de búsqueda
+--                                     antes de que el usuario escriba
+--   proyectar_ponches(...)            normaliza el rival, la ventana pasa a
+--                                     ser preferencia, avisa fuerte cuando
+--                                     proyecta contra un equipo promedio
+--   pitcher_stats_snapshot.mlb_id     columna nueva; 771/825 cargados,
+--                                     224/225 abridores
+--   game_logs.es_local, .game_pk      + dos índices únicos parciales para
+--                                     que recargar la temporada sea idempotente
+--   _carga_historial                  tabla de andamio de la carga: borrada
+--                                     (estaba en public sin RLS)
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro.
