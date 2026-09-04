@@ -74,6 +74,11 @@ interface Historial {
   encontrado: boolean;
   pitcher?: string;
   equipo?: string | null;
+  // La línea con la que se calculó ESTA respuesta. Se dibuja la que volvió,
+  // no la que hay en el campo: si el usuario ya empezó a escribir otra, la
+  // raya del gráfico tiene que seguir marcando contra qué se pintaron las
+  // barras que están en pantalla.
+  linea?: number | null;
   cantidad?: number;
   salidas?: SalidaHistorica[];
   k_promedio?: number | null;
@@ -94,6 +99,7 @@ interface Proyeccion {
   encontrado: boolean;
   pitcher?: string;
   equipo?: string | null;
+  linea?: number | null;
   rival?: string | null;
   mano_pitcher?: string | null;
   k_proyectados?: number | null;
@@ -169,6 +175,19 @@ export default function BuscarLanzadorScreen() {
     return Number.isFinite(v) && v > 0 ? v : null;
   }, [linea]);
 
+  // La línea que de verdad se consulta va un paso atrás de lo que se escribe.
+  //
+  // Sin esto, tipear "6.5" dispara tres pares de consultas — una por "6", una
+  // por "6." y una por "6.5" — y como cada par tarda distinto, la tarjeta
+  // puede terminar mostrando el resultado de "6" arriba del de "6.5". El
+  // freno es corto porque los chips de 4.5/5.5/6.5/7.5 son un toque solo y no
+  // deberían sentirse lentos.
+  const [lineaConsultada, setLineaConsultada] = useState<number | null>(6.5);
+  useEffect(() => {
+    const reloj = setTimeout(() => setLineaConsultada(lineaNumero), 350);
+    return () => clearTimeout(reloj);
+  }, [lineaNumero]);
+
   // Lo que llena la pantalla antes de escribir nada: una pantalla de búsqueda
   // en blanco obliga a saber a quién buscar.
   useEffect(() => {
@@ -241,8 +260,8 @@ export default function BuscarLanzadorScreen() {
 
   useEffect(() => {
     if (!elegido) return;
-    consultar(elegido, lineaNumero, ventana, rival);
-  }, [elegido, lineaNumero, ventana, rival, consultar]);
+    consultar(elegido, lineaConsultada, ventana, rival);
+  }, [elegido, lineaConsultada, ventana, rival, consultar]);
 
   function elegir(pitcher: string, datos?: Partial<Candidato>) {
     setElegido({
@@ -448,12 +467,12 @@ export default function BuscarLanzadorScreen() {
                   <View style={{ flexDirection: "row", gap: 10 }}>
                     <Metrica
                       valor={pct(proyeccion.prob_over)}
-                      etiqueta={`Over ${num(lineaNumero, 1)}`}
+                      etiqueta={`Over ${num(proyeccion.linea ?? lineaConsultada, 1)}`}
                       tono={proyeccion.veredicto === "OVER" ? "exito" : "neutral"}
                     />
                     <Metrica
                       valor={pct(proyeccion.prob_under)}
-                      etiqueta={`Under ${num(lineaNumero, 1)}`}
+                      etiqueta={`Under ${num(proyeccion.linea ?? lineaConsultada, 1)}`}
                       tono={proyeccion.veredicto === "UNDER" ? "exito" : "neutral"}
                     />
                     {(proyeccion.prob_empate ?? 0) > 0 && (
@@ -564,7 +583,7 @@ export default function BuscarLanzadorScreen() {
                     </Text>
                   </View>
 
-                  <GraficoSalidas salidas={salidas} linea={lineaNumero} />
+                  <GraficoSalidas salidas={salidas} linea={historial.linea ?? lineaConsultada} />
 
                   <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
                     <Metrica valor={num(historial.k_promedio, 2)} etiqueta="K promedio" />

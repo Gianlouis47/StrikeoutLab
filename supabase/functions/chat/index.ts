@@ -91,8 +91,52 @@ const MAX_RONDAS = 9;
  * Con esto, pasado el presupuesto se corta de llamar herramientas y se pide la
  * respuesta con lo que ya está juntado. Vale más una respuesta con tres de las
  * cuatro cosas que un error con las cuatro a medio hacer.
+ *
+ * 55s y no 85s: el corte para el ciclo de herramientas, pero DESPUÉS todavía
+ * hay que pedirle la respuesta final al modelo, y esa llamada también tarda —
+ * con todo lo juntado en el hilo, bastante. Con 85 el total se fue igual a
+ * 150s y el usuario volvió a ver un error. El presupuesto tiene que dejar
+ * lugar para contestar, no solo para buscar.
  */
-const TOPE_MS_HERRAMIENTAS = 85000;
+const TOPE_MS_HERRAMIENTAS = 55000;
+
+/**
+ * Cuánto se le aguanta a UNA llamada al modelo de razonamiento.
+ *
+ * Es el mismo problema que el de visión, en otro lado, y costó dos intentos
+ * darse cuenta. Bajar el presupuesto de herramientas de 85s a 55s no cambió
+ * nada: la pregunta "demostrame que el sistema sirve" siguió pasándose de los
+ * 150 segundos. El tiempo no se iba en el ciclo — se iba DENTRO de una sola
+ * llamada.
+ *
+ * Estos son modelos de razonamiento: con max_tokens en 4000 y una pregunta
+ * abierta, uno solo puede pensar 4000 tokens antes de decir la primera
+ * palabra. A 40 tokens por segundo eso es 100 segundos en UNA llamada, y
+ * ningún tope que se mire "entre vueltas" lo va a atrapar.
+ *
+ * Con el corte, esa llamada se aborta y se pasa al modelo siguiente de la
+ * lista. Antes, un modelo pensando de más dejaba al usuario sin nada.
+ *
+ * Los 40s del primer intento resultaron DEMASIADO cortos: con este prompt de
+ * sistema (9 KB) y doce herramientas, los tres modelos se pasaron de 40s en
+ * la PRIMERA llamada, antes de ejecutar una sola herramienta, y la función
+ * devolvió 502. Las mediciones viejas de 1.6s eran con preguntas triviales.
+ *
+ * Así que el tope no puede ser un número fijo: el primero tiene que poder
+ * tomarse su tiempo, y el respaldo existe para ser rápido — si el respaldo
+ * también piensa un minuto, no sirve de respaldo. Y ninguno de los dos puede
+ * hacer que el total se pase del techo.
+ */
+const TOPE_MS_PRIMER_MODELO = 70000;
+const TOPE_MS_MODELO_RESPALDO = 30000;
+
+/**
+ * Techo de toda la respuesta. Debajo del límite de la Edge Function y de la
+ * paciencia de cualquiera mirando un celular. Lo que quede de este
+ * presupuesto es lo que se le puede dar a la llamada siguiente: así el corte
+ * de un intento nunca empuja el total por encima del techo.
+ */
+const TOPE_MS_TOTAL = 115000;
 
 /** Qué versión del sistema produce las confianzas de hoy. Ver picks.sistema. */
 const SISTEMA_ACTUAL = "PROYECCION";
@@ -468,6 +512,24 @@ const HERRAMIENTAS = [
   {
     type: "function",
     function: {
+      name: "backtest",
+      description:
+        "Corre el modelo hacia atrás sobre las 3.658 salidas reales de la temporada, caminando hacia adelante (para cada salida usa SOLO las anteriores de ese lanzador, nunca lo que pasó después). Devuelve la curva de calibración: qué confianza declaró y qué pasó de verdad. Usalo cuando pregunte si los números sirven, si el sistema es confiable, o por qué se le bajan las confianzas. LEÉ Y CITÁ el campo ESTAR_CALIBRADO_NO_ES_GANAR_PLATA antes de sacar conclusiones: la tasa general está inflada por líneas regaladas y lo único que se puede leer es 'zona_de_decision' y la curva.",
+      parameters: {
+        type: "object",
+        properties: {
+          peso_ancla: {
+            type: "number",
+            description:
+              "En cuántas salidas equivalentes pesa la media de liga al regresar a la media. 6 es lo que usa la app; 0 es creerle entero al promedio crudo del lanzador. Sirve para mostrar que regresar a la media mejora la calibración.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "buscar_web",
       description:
         "Busca en internet datos actuales que no estén en la base: lineup confirmado de hoy, clima, lesiones, noticias. No lo uses para estadísticas de temporada, esas ya están guardadas.",
@@ -734,6 +796,15 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
       return data;
     }
 
+    case "backtest": {
+      const { data, error } = await supabase.rpc("backtest_ponches", {
+        p_minimo_previas: 8,
+        p_peso_ancla: args.peso_ancla ?? 6,
+      });
+      if (error) return { error: error.message };
+      return data;
+    }
+
     case "buscar_web": {
       const tavilyKey = Deno.env.get("TAVILY_API_KEY");
       if (!tavilyKey) return "Búsqueda web no configurada. Respondé con lo que ya tenés.";
@@ -831,6 +902,8 @@ REGLAS DURAS:
 - Una línea entera (ej. 7) puede terminar en empate y devuelven la plata: tenelo en cuenta al recomendar, y avisá que en parlay eso depende de qué haga Star Sport con la pata.
 - El corte no es la confianza, es la cuota: al -130 hace falta 56.5% para empatar. "Conviene" lo dice evaluar_apuesta, no vos.
 - La calibración se mide POR SISTEMA. El sistema de ahora es PROYECCION y todavía no tiene picks con resultado, así que su confianza se comprime al 35% de su distancia al 50% — no por castigo, sino porque sin historial no hay con qué sostener más: al -130 el equilibrio está en 56.5% y la casa se queda con ~13%, así que una ventaja grande de verdad no existe. El puntuador viejo (HEURISTICO) sacó 3 de 13 declarando 81%; eso NO se hereda, es otro método, pero si él pregunta por qué bajás los números llamá a "calibracion_real" y mostrale las dos cosas.
+- Si pregunta si el sistema sirve, llamá a "backtest". Corre el modelo sobre las 3.658 salidas reales caminando hacia adelante: para cada salida usa solo las anteriores de ese lanzador, nunca lo que pasó después. En la zona donde se apuesta de verdad (52%-66%) declaró 58.8% y pasó 58.7% sobre 2.965 apuestas. Eso significa que cuando el modelo dice un número, ese número es honesto.
+- **Pero estar calibrado NO es tener ventaja, y esto no se dice a medias.** La tasa general del backtest (~72%) está inflada porque se evaluó contra líneas fijas: acertarle el over de 4.5 a alguien que promedia 8 ponches es gratis, y esa apuesta no existe al -130. Star Sport pone la línea justo donde la probabilidad real queda pegada al 50%. Si citás el backtest, citá SIEMPRE la zona de decisión y la advertencia, nunca el 72% suelto. Y si él pregunta si eso permite subir las confianzas: no. Lo único que las destraba es guardar picks y anotar el resultado.
 - Cada pick que se guarde alimenta la calibración del sistema nuevo. Si él quiere números menos castigados, la salida es cargar resultados, no subir la confianza: decíselo así.
 - El valor esperado de un parlay SUBE con cada pata y aun así te funde: son cosas distintas. Si citás el valor esperado de un parlay largo, citá al lado la mediana y la probabilidad de fundirte, o estás mintiendo por omisión.
 - Si el nombre del lanzador es ambiguo (la calculadora te avisa), preguntá cuál es antes de dar la recomendación por buena.`;
@@ -907,6 +980,7 @@ Deno.serve(async (req: Request) => {
     mensajes.push({ role: "user", content: contenido || "(sin texto)" });
   }
 
+  const arranque = Date.now();
   const herramientasUsadas: Array<{ nombre: string; argumentos: unknown; resultado: unknown }> = [];
   let respuestaFinal = "";
   let razonamiento: string | null = null;
@@ -916,10 +990,22 @@ Deno.serve(async (req: Request) => {
   // dejar al usuario sin respuesta.
   async function pedirAlModelo(conHerramientas = true): Promise<any> {
     let ultimoError = "";
-    for (const modelo of MODELOS_RAZONAMIENTO) {
+    for (const [i, modelo] of MODELOS_RAZONAMIENTO.entries()) {
+      // Lo que le toca a este intento: su tope, pero nunca más de lo que
+      // queda del presupuesto total. Si ya no queda nada, no se intenta —
+      // arrancar una llamada que no puede terminar solo garantiza el error.
+      const queda = TOPE_MS_TOTAL - (Date.now() - arranque);
+      const tope = Math.min(i === 0 ? TOPE_MS_PRIMER_MODELO : TOPE_MS_MODELO_RESPALDO, queda);
+      if (tope < 5000) {
+        ultimoError = `se acabó el tiempo antes de poder probar ${modelo}`;
+        break;
+      }
+      const corte = new AbortController();
+      const reloj = setTimeout(() => corte.abort(), tope);
       try {
         const resp = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
           method: "POST",
+          signal: corte.signal,
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: modelo,
@@ -928,7 +1014,7 @@ Deno.serve(async (req: Request) => {
               ? { tools: HERRAMIENTAS, tool_choice: "auto" }
               : { tool_choice: "none" }),
             temperature: 0.3,
-            max_tokens: 4000,
+            max_tokens: 2000,
           }),
         });
         if (!resp.ok) {
@@ -938,14 +1024,33 @@ Deno.serve(async (req: Request) => {
         modeloEnUso = modelo;
         return await resp.json();
       } catch (e) {
-        ultimoError = `${modelo}: ${(e as Error).message}`;
+        ultimoError = corte.signal.aborted
+          ? `${modelo} pasó de ${Math.round(tope / 1000)}s pensando y se cortó`
+          : `${modelo}: ${(e as Error).message}`;
+      } finally {
+        clearTimeout(reloj);
       }
     }
-    throw new Error(`Ningún modelo pudo responder. Último problema: ${ultimoError}`);
+    // Este texto lo lee el usuario en la pantalla, así que dice qué hacer y
+    // no solo qué falló.
+    throw new Error(
+      `Los modelos están lentos ahora mismo y ninguno llegó a contestar a tiempo. ` +
+        `Probá de nuevo en un minuto, o pedime menos cosas de una vez. (${ultimoError})`,
+    );
   }
 
-  const arranque = Date.now();
   let seCortoPorTiempo = false;
+
+  // Lo mismo, pedido dos veces, no se ejecuta dos veces.
+  //
+  // Verificado en la función desplegada: ante "demostrame que el sistema
+  // sirve" el modelo llamó a backtest TRES veces y a calibracion_real DOS,
+  // todas con los mismos argumentos. Cada una es una vuelta perdida y, peor,
+  // mete otra copia del mismo JSON grande en el hilo, así que la vuelta
+  // siguiente arranca más pesada que la anterior. Se responde de la memoria y
+  // se le dice al modelo que ya lo tiene, que es la información que le
+  // faltaba para dejar de pedirlo.
+  const yaEjecutadas = new Map<string, unknown>();
 
   try {
     for (let ronda = 0; ronda < MAX_RONDAS; ronda++) {
@@ -970,7 +1075,20 @@ Deno.serve(async (req: Request) => {
           } catch {
             args = {};
           }
-          const resultado = await ejecutarHerramienta(supabase, llamada.function.name, args);
+          const huella = `${llamada.function.name}:${JSON.stringify(args)}`;
+          let resultado: unknown;
+          if (yaEjecutadas.has(huella)) {
+            resultado = {
+              repetida: true,
+              aviso:
+                `Ya llamaste a "${llamada.function.name}" con estos mismos argumentos y el ` +
+                "resultado está más arriba en esta conversación. No lo pidas de nuevo: usalo y contestá.",
+              resultado_anterior: yaEjecutadas.get(huella),
+            };
+          } else {
+            resultado = await ejecutarHerramienta(supabase, llamada.function.name, args);
+            yaEjecutadas.set(huella, resultado);
+          }
           herramientasUsadas.push({ nombre: llamada.function.name, argumentos: args, resultado });
           mensajes.push({
             role: "tool",
