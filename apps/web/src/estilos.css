@@ -292,6 +292,97 @@ textarea:focus {
   color: #fff;
 }
 
+/* Elegir una opción entre dos o tres. Botones sólidos para esto hacían que
+ * "Derecho / Zurdo" pesara visualmente lo mismo que "Guardar pick", y lo que
+ * pesa es lo que se toca por error. */
+.opciones {
+  display: flex;
+  gap: 8px;
+}
+
+.opcion {
+  flex: 1;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--borde);
+  background: var(--tarjeta);
+  color: var(--texto-suave);
+  font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.opcion[aria-pressed="true"] {
+  border-color: currentColor;
+  font-weight: 700;
+}
+
+.opcion.acento[aria-pressed="true"] {
+  color: var(--acento);
+  background: color-mix(in srgb, var(--acento) 15%, transparent);
+}
+.opcion.exito[aria-pressed="true"] {
+  color: var(--exito);
+  background: color-mix(in srgb, var(--exito) 15%, transparent);
+}
+.opcion.advertencia[aria-pressed="true"] {
+  color: var(--advertencia);
+  background: color-mix(in srgb, var(--advertencia) 15%, transparent);
+}
+
+/* ---------- Barra de proporción ---------- */
+
+/* Dos barras una arriba de la otra hacen visible un desfase de calibración
+ * sin que haya que restar dos porcentajes de cabeza. */
+.progreso {
+  height: 7px;
+  border-radius: 4px;
+  background: var(--borde);
+  overflow: hidden;
+}
+
+.progreso > i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--acento);
+}
+
+.progreso.exito > i {
+  background: var(--exito);
+}
+.progreso.peligro > i {
+  background: var(--peligro);
+}
+.progreso.advertencia > i {
+  background: var(--advertencia);
+}
+
+/* ---------- Botón de texto (acción liviana) ---------- */
+
+/* Un botón sólido por tarjeta hacía que el historial pareciera un formulario
+ * en vez de una lista. */
+.enlace {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  color: var(--acento);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  align-self: flex-start;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.enlace.apagado {
+  color: var(--texto-suave);
+  font-weight: 500;
+}
+
 /* ---------- Insignias, métricas, mensajes ---------- */
 
 .insignia {

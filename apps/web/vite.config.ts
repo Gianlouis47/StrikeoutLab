@@ -70,5 +70,15 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    // El aviso por defecto salta a los 500 kB sin comprimir. El bulto de acá
+    // es React + supabase-js + zod, que se bajan una sola vez y después los
+    // sirve el service worker desde el disco del teléfono; comprimido son
+    // ~147 kB. Las cinco pantallas de "Más" ya salieron a chunks aparte con
+    // React.lazy, que era lo único que se podía sacar del arranque sin
+    // romper nada. Se sube el umbral para no dejar un aviso permanente que
+    // enseñe a ignorar los avisos.
+    chunkSizeWarningLimit: 600,
+  },
   server: { host: true, port: 5173 },
 });

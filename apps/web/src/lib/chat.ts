@@ -41,6 +41,49 @@ export async function chat(mensajes: MensajeChat[]): Promise<RespuestaChat> {
   return data;
 }
 
+/** Lo que la IA saca de una foto: un ticket, una captura de stats o un boxscore. */
+export interface DatosExtraidosFoto {
+  tipo_detectado: "ticket_star_sport" | "captura_stats" | "boxscore" | "desconocido";
+  pitcher: string | null;
+  equipo: string | null;
+  rival: string | null;
+  linea: number | null;
+  pick: "OVER" | "UNDER" | null;
+  cuota: number | null;
+  codigo: string | null;
+  fecha: string | null;
+  k: number | null;
+  ip: number | null;
+  bb: number | null;
+  pitcheos: number | null;
+  otros_datos: Record<string, unknown>;
+}
+
+/**
+ * Transcribe una foto a campos. Solo transcribe: no guarda nada y no decide
+ * nada. Lo que devuelve va a un formulario para que el usuario lo corrija
+ * antes de guardarlo, porque un boxscore mal leído entra a `game_logs` y
+ * después ensucia todas las proyecciones de ese lanzador.
+ */
+export async function analizarFoto(params: {
+  imagenBase64: string;
+  mimeType: string;
+}): Promise<{ datosExtraidos: DatosExtraidosFoto; modeloUsado: string }> {
+  const { data, error } = await supabase.functions.invoke<{
+    datosExtraidos: DatosExtraidosFoto;
+    modeloUsado: string;
+  }>("analizar-foto", { body: params });
+  if (error) {
+    const detalle = await (error as { context?: { json?: () => Promise<{ error?: string }> } })
+      .context?.json?.()
+      .then((j) => j?.error)
+      .catch(() => undefined);
+    throw new Error(detalle ?? error.message);
+  }
+  if (!data) throw new Error("analizar-foto no devolvió datos.");
+  return data;
+}
+
 /**
  * Una foto del celular, lista para mandar.
  *

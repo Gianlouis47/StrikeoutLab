@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { repositorio } from "../lib/repositorio";
 import { GraficoSalidas, type SalidaHistorica } from "../componentes/GraficoSalidas";
+import { Insignia, Mensaje, Metrica, num, pct } from "../componentes/ui";
 
 const CUOTA_STAR_SPORT = -130;
 const LINEAS_COMUNES = [4.5, 5.5, 6.5, 7.5];
@@ -92,17 +93,6 @@ interface Proyeccion {
     explicacion?: string;
     prob_de_equilibrio?: number;
   };
-}
-
-/** 0.6190 -> "61.9%". Null se muestra como raya, no como "0%". */
-function pct(v: number | null | undefined, decimales = 1): string {
-  if (v === null || v === undefined) return "—";
-  return `${(Number(v) * 100).toFixed(decimales)}%`;
-}
-
-function num(v: number | null | undefined, decimales = 2): string {
-  if (v === null || v === undefined) return "—";
-  return Number(v).toFixed(decimales);
 }
 
 export function BuscarLanzador() {
@@ -307,11 +297,7 @@ export function BuscarLanzador() {
         </>
       )}
 
-      {error && (
-        <div className="mensaje peligro" style={{ borderColor: "var(--peligro)" }}>
-          {error}
-        </div>
-      )}
+      {error && <Mensaje tono="peligro">{error}</Mensaje>}
 
       {elegido && (
         <>
@@ -395,41 +381,25 @@ export function BuscarLanzador() {
               <h2 className="seccion">Probabilidad calculada</h2>
               <div className="tarjeta elevada">
                 <div className="metricas">
-                  <div className="metrica">
-                    <div className={`valor ${proyeccion.veredicto === "OVER" ? "exito" : ""}`}>
-                      {pct(proyeccion.prob_over)}
-                    </div>
-                    <div className="etiqueta">Over {num(proyeccion.linea ?? lineaConsultada, 1)}</div>
-                  </div>
-                  <div className="metrica">
-                    <div className={`valor ${proyeccion.veredicto === "UNDER" ? "exito" : ""}`}>
-                      {pct(proyeccion.prob_under)}
-                    </div>
-                    <div className="etiqueta">Under {num(proyeccion.linea ?? lineaConsultada, 1)}</div>
-                  </div>
+                  <Metrica
+                    valor={pct(proyeccion.prob_over)}
+                    etiqueta={`Over ${num(proyeccion.linea ?? lineaConsultada, 1)}`}
+                    tono={proyeccion.veredicto === "OVER" ? "exito" : "neutral"}
+                  />
+                  <Metrica
+                    valor={pct(proyeccion.prob_under)}
+                    etiqueta={`Under ${num(proyeccion.linea ?? lineaConsultada, 1)}`}
+                    tono={proyeccion.veredicto === "UNDER" ? "exito" : "neutral"}
+                  />
                   {(proyeccion.prob_empate ?? 0) > 0 && (
-                    <div className="metrica">
-                      <div className="valor advertencia">{pct(proyeccion.prob_empate)}</div>
-                      <div className="etiqueta">Empate (devuelven)</div>
-                    </div>
+                    <Metrica valor={pct(proyeccion.prob_empate)} etiqueta="Empate (devuelven)" tono="advertencia" />
                   )}
                 </div>
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <span
-                    className="insignia acento"
-                    style={{ borderColor: "color-mix(in srgb, var(--acento) 40%, transparent)" }}
-                  >
-                    {num(proyeccion.k_proyectados)} K proyectados
-                  </span>
-                  <span className="insignia suave" style={{ borderColor: "var(--borde)" }}>
-                    {num(proyeccion.bateadores_esperados, 1)} bateadores
-                  </span>
-                  {proyeccion.nivel && (
-                    <span className="insignia suave" style={{ borderColor: "var(--borde)" }}>
-                      {proyeccion.nivel}
-                    </span>
-                  )}
+                  <Insignia tono="acento">{num(proyeccion.k_proyectados)} K proyectados</Insignia>
+                  <Insignia>{num(proyeccion.bateadores_esperados, 1)} bateadores</Insignia>
+                  {proyeccion.nivel && <Insignia>{proyeccion.nivel}</Insignia>}
                 </div>
 
                 {/* Lo único que decide si se apuesta. */}
@@ -462,13 +432,9 @@ export function BuscarLanzador() {
               </div>
 
               {(proyeccion.advertencias ?? []).map((a, i) => (
-                <div
-                  key={i}
-                  className="mensaje advertencia"
-                  style={{ borderColor: "color-mix(in srgb, var(--advertencia) 40%, transparent)" }}
-                >
+                <Mensaje key={i} tono="advertencia">
                   {a}
-                </div>
+                </Mensaje>
               ))}
               {(proyeccion.supuestos ?? []).length > 0 && (
                 <p className="suave">Supuestos: {(proyeccion.supuestos ?? []).join(" · ")}</p>
@@ -491,9 +457,7 @@ export function BuscarLanzador() {
           </div>
 
           {ventana === "H2H" && rival === null && (
-            <div className="mensaje advertencia" style={{ borderColor: "var(--advertencia)" }}>
-              Elegí un rival arriba para ver el head-to-head.
-            </div>
+            <Mensaje tono="advertencia">Elegí un rival arriba para ver el head-to-head.</Mensaje>
           )}
 
           {historial?.encontrado && salidas.length > 0 && (
@@ -514,32 +478,24 @@ export function BuscarLanzador() {
               <GraficoSalidas salidas={salidas} linea={historial.linea ?? lineaConsultada} />
 
               <div className="metricas" style={{ marginTop: 10 }}>
-                <div className="metrica">
-                  <div className="valor">{num(historial.k_promedio)}</div>
-                  <div className="etiqueta">K promedio</div>
-                </div>
-                <div className="metrica">
-                  <div className="valor">{num(historial.k_mediana, 1)}</div>
-                  <div className="etiqueta">K mediana</div>
-                </div>
-                <div className="metrica">
-                  <div className="valor">{num(historial.ip_promedio, 1)}</div>
-                  <div className="etiqueta">IP promedio</div>
-                </div>
+                <Metrica valor={num(historial.k_promedio)} etiqueta="K promedio" />
+                <Metrica valor={num(historial.k_mediana, 1)} etiqueta="K mediana" />
+                <Metrica valor={num(historial.ip_promedio, 1)} etiqueta="IP promedio" />
               </div>
 
               {historial.racha && (
-                <span
-                  className={`insignia ${
-                    historial.racha.includes("OVER")
-                      ? "exito"
-                      : historial.racha.includes("UNDER")
-                        ? "peligro"
-                        : "advertencia"
-                  }`}
-                  style={{ borderColor: "currentColor", alignSelf: "flex-start" }}
-                >
-                  {historial.racha}
+                <span style={{ alignSelf: "flex-start" }}>
+                  <Insignia
+                    tono={
+                      historial.racha.includes("OVER")
+                        ? "exito"
+                        : historial.racha.includes("UNDER")
+                          ? "peligro"
+                          : "advertencia"
+                    }
+                  >
+                    {historial.racha}
+                  </Insignia>
                 </span>
               )}
 
@@ -555,9 +511,7 @@ export function BuscarLanzador() {
           )}
 
           {historial?.encontrado && salidas.length === 0 && !cargando && (
-            <div className="mensaje advertencia" style={{ borderColor: "var(--advertencia)" }}>
-              {historial.mensaje ?? "No hay salidas en esta ventana."}
-            </div>
+            <Mensaje tono="advertencia">{historial.mensaje ?? "No hay salidas en esta ventana."}</Mensaje>
           )}
 
           {salidas.length > 0 && (

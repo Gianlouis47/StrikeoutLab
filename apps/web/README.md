@@ -19,6 +19,27 @@ un navegador headless y se mira. El primer bug de esta versión (las filas de
 chips salían aplastadas a una raya de dos píxeles) se encontró así, en la
 primera captura, no leyendo el código.
 
+## Las pantallas
+
+Abajo, las tres de todos los días. En **Más**, las de revisar y corregir.
+
+| Pantalla | Qué hace |
+|---|---|
+| **Análisis** | El chat. Foto del ticket, pregunta suelta, la IA busca y calcula. |
+| **Lanzador** | La probabilidad calculada arriba, el historial con filtros y gráfico abajo. |
+| **Historial** | Los picks jugados. Acá se anota cuántos ponches sacó cada uno. |
+| **Calibración** | Cuánto declaraste contra cuánto ganaste, banda por banda. |
+| **Parlay** | La escalera de 1 a 12 patas y dónde conviene cortar. |
+| **Rivales** | Qué tanto se poncha bateando cada equipo. |
+| **Pick manual** | Cargar una apuesta a mano, con la proyección al lado. |
+| **Salida manual** | Anotar el resultado real de un juego (alimenta el historial). |
+
+Las cinco de "Más" se bajan recién al entrar (`React.lazy`): el arranque pesa
+147 kB comprimidos y después lo sirve el service worker desde el teléfono.
+
+Las pestañas se esconden con `display: none` en vez de desmontarse, así no se
+pierde lo que estabas escribiendo al cambiar de pestaña.
+
 ## Lo que NO cambió
 
 Toda la parte que importa:
@@ -64,3 +85,22 @@ Abrir la URL de Vercel en Chrome (Android) o Safari (iPhone):
 Queda con ícono propio y abre sin la barra del navegador. Cuando se publica
 una versión nueva, el service worker la toma solo — no hay que reinstalar
 nada, que es la otra diferencia grande con el APK.
+
+## Qué está probado y qué no
+
+Probado en un Chromium de verdad a 390×844, con los datos reales de la base
+interceptados en la red (el proxy de este contenedor bloquea `supabase.co`
+también para el navegador, así que los datos se traen aparte y se sirven a
+mano):
+
+- Las nueve pantallas dibujan; **cero errores de consola**.
+- Las escrituras salen bien: al anotar un resultado se manda solo
+  `{resultado_k}` — quién ganó lo decide la base, no el navegador — y el pick
+  manual guarda la confianza **calibrada** (0.53), no la cruda (0.59).
+- El estado sobrevive al cambio de pestaña: se elige un lanzador, se va a
+  Historial, se vuelve, y la pantalla quedó igual.
+- El build emite `manifest.webmanifest` y `sw.js`.
+
+**No** está probada la conexión viva a Supabase desde el navegador: login
+real, chat real y proyección real contra la base hay que probarlos una vez
+desplegado en Vercel.

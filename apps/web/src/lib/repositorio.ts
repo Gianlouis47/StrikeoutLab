@@ -56,6 +56,22 @@ export const repositorio = {
     return data as T;
   },
 
+  /**
+   * Inserta o pisa según una clave. `conflicto` son las columnas que definen
+   * "la misma fila": corregir el K% de NYY de esta temporada tiene que
+   * sobrescribir la fila que ya está, no dejar dos filas contradictorias que
+   * después la calculadora elige a la suerte.
+   */
+  async upsert<T>(tabla: string, datos: Record<string, unknown>, conflicto: string): Promise<T> {
+    const { data, error } = await supabase
+      .from(tabla)
+      .upsert(datos as never, { onConflict: conflicto })
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return data as T;
+  },
+
   /** Llama a una función de Postgres (RPC). Ver la nota de arriba. */
   async llamar<T>(funcion: string, argumentos: Record<string, unknown> = {}): Promise<T> {
     const { data, error } = await supabase.rpc(funcion, argumentos as never);
