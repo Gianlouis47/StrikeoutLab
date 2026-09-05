@@ -62,6 +62,12 @@ class SupabaseRepositorio implements Repositorio {
     if (error) throw new Error(error.message);
     return data as T;
   }
+
+  async llamar<T>(funcion: string, argumentos: Record<string, unknown> = {}): Promise<T> {
+    const { data, error } = await supabase.rpc(funcion, argumentos as never);
+    if (error) throw new Error(error.message);
+    return data as T;
+  }
 }
 
 /** Instancia única para toda la app — las pantallas importan esto, nunca `supabase` directo. */

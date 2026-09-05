@@ -5,13 +5,13 @@ import {
   FlatList,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { TextoRico } from "../components/TextoRico";
 import { Barra, Boton, Insignia, Mensaje, colores, estilos } from "../components/ui";
 import { SISTEMA_ACTUAL, type Proyeccion } from "../lib/calculadora";
 import { confirmarAccion } from "../lib/confirmacion";
@@ -415,15 +415,7 @@ export default function ChatScreen() {
               resizeMode="cover"
             />
           )}
-          <Text
-            style={{
-              color: esUsuario ? "#fff" : colores.texto,
-              fontSize: 15,
-              lineHeight: 21,
-            }}
-          >
-            {item.texto}
-          </Text>
+          <TextoRico texto={item.texto} color={esUsuario ? "#fff" : colores.texto} />
         </View>
 
         {item.pick && <TarjetaPick burbuja={item} />}
@@ -438,15 +430,10 @@ export default function ChatScreen() {
   }
 
   return (
-    // En Android el hueco del teclado lo reserva App.tsx, que mide si la
-    // ventana se achicó sola; acá se apaga para no levantar la barra dos
-    // veces. En iOS sigue mandando esto, que ahí anda bien.
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior="padding"
-      enabled={Platform.OS === "ios"}
-      keyboardVerticalOffset={8}
-    >
+    // Sin KeyboardAvoidingView acá: el de react-native-keyboard-controller
+    // envuelve la app entera en App.tsx y corre pantallas y barra de
+    // pestañas juntas. Meter otro adentro levantaría la barra dos veces.
+    <View style={{ flex: 1 }}>
       {burbujas.length > 0 && (
         <View
           style={{
@@ -620,6 +607,6 @@ export default function ChatScreen() {
           <Ionicons name="arrow-up" size={20} color="#fff" />
         </Pressable>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }

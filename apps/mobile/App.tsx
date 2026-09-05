@@ -3,12 +3,13 @@ import type { Session } from "@supabase/supabase-js";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, SafeAreaView, Text, View } from "react-native";
+import { KeyboardAvoidingView, KeyboardProvider } from "react-native-keyboard-controller";
 import { Boton, colores, estilos } from "./components/ui";
 import { confirmarAccion } from "./lib/confirmacion";
 import type { DatosExtraidosFoto } from "./lib/edgeFunctions";
 import { supabase } from "./lib/supabase";
-import { useEspacioTeclado } from "./lib/teclado";
 import AnalizarFotoScreen from "./screens/AnalizarFotoScreen";
+import BuscarLanzadorScreen from "./screens/BuscarLanzadorScreen";
 import ChatScreen from "./screens/ChatScreen";
 import DashboardScreen from "./screens/DashboardScreen";
 import HistorialScreen from "./screens/HistorialScreen";
@@ -23,12 +24,13 @@ import RivalesScreen from "./screens/RivalesScreen";
 // detrás de "Más" en vez de competir por espacio en la barra.
 const PESTANAS_PRINCIPALES = [
   { id: "chat", titulo: "Análisis", icono: "chatbubbles" },
+  { id: "buscar", titulo: "Lanzador", icono: "search" },
   { id: "historial", titulo: "Historial", icono: "time" },
-  { id: "dashboard", titulo: "Calibración", icono: "stats-chart" },
   { id: "mas", titulo: "Más", icono: "ellipsis-horizontal" },
 ] as const satisfies ReadonlyArray<{ id: string; titulo: string; icono: keyof typeof Ionicons.glyphMap }>;
 
 const PESTANAS_SECUNDARIAS = [
+  { id: "dashboard", titulo: "Calibración", icono: "stats-chart" },
   { id: "nuevoPick", titulo: "Pick manual", icono: "add-circle" },
   { id: "salida", titulo: "Salida manual", icono: "baseball" },
   { id: "foto", titulo: "Foto suelta", icono: "camera" },
@@ -66,7 +68,7 @@ function Pestana({
   return <View style={{ flex: 1, display: activa ? "flex" : "none" }}>{children}</View>;
 }
 
-export default function App() {
+function Contenido() {
   const [session, setSession] = useState<Session | null>(null);
   const [cargandoSesion, setCargandoSesion] = useState(true);
   const [pestana, setPestana] = useState<PestanaId>("chat");
@@ -75,9 +77,6 @@ export default function App() {
   const [visitadas, setVisitadas] = useState<Set<PestanaId>>(() => new Set<PestanaId>(["chat"]));
   const [menuAbierto, setMenuAbierto] = useState(false);
   const [borrador, setBorrador] = useState<BorradorPick | null>(null);
-  // El teclado se maneja acá arriba y no adentro de cada pantalla: así la
-  // barra de pestañas también se corre y ninguna queda tapada por su cuenta.
-  const teclado = useEspacioTeclado();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -110,26 +109,35 @@ export default function App() {
 
   if (!session) {
     return (
-      <SafeAreaView
-        style={[estilos.pantalla, { paddingBottom: teclado.espacio }]}
-        onLayout={teclado.onLayout}
-      >
-        <LoginScreen />
-        <StatusBar style="light" />
-      </SafeAreaView>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        <SafeAreaView style={estilos.pantalla}>
+          <LoginScreen />
+          <StatusBar style="light" />
+        </SafeAreaView>
+      </KeyboardAvoidingView>
     );
   }
 
   const enSecundaria = PESTANAS_SECUNDARIAS.some((p) => p.id === pestana);
 
   return (
-    <SafeAreaView
-      style={[estilos.pantalla, { paddingBottom: teclado.espacio }]}
-      onLayout={teclado.onLayout}
-    >
+    // El KeyboardAvoidingView es el de react-native-keyboard-controller, no
+    // el de React Native. Desde Android 15 el sistema ya no achica la ventana
+    // cuando sale el teclado (edge-to-edge forzado), y el de React Native
+    // quedó estructuralmente roto ahí: por eso el campo se veía tapado.
+    // Este corre en el hilo de UI y se comporta igual en los dos sistemas.
+    //
+    // Va envolviendo TODO, pantallas y barra de pestañas juntas, que es el
+    // comportamiento que las pantallas ya esperaban de cuando adjustResize
+    // funcionaba.
+    <SafeAreaView style={estilos.pantalla}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
       <View style={{ flex: 1 }}>
         <Pestana activa={pestana === "chat"} visitada={visitadas.has("chat")}>
           <ChatScreen />
+        </Pestana>
+        <Pestana activa={pestana === "buscar"} visitada={visitadas.has("buscar")}>
+          <BuscarLanzadorScreen />
         </Pestana>
         <Pestana activa={pestana === "dashboard"} visitada={visitadas.has("dashboard")}>
           <DashboardScreen />
@@ -278,6 +286,21 @@ export default function App() {
       </View>
 
       <StatusBar style="light" />
+      </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+/**
+ * KeyboardProvider va en la raíz, arriba de todo, incluida la pantalla de
+ * carga y la de login: es el que instala el listener nativo que sigue al
+ * teclado cuadro a cuadro. Sin él, los componentes de la librería no se
+ * mueven y volvemos al problema original.
+ */
+export default function App() {
+  return (
+    <KeyboardProvider>
+      <Contenido />
+    </KeyboardProvider>
   );
 }

@@ -36,4 +36,15 @@ export interface Repositorio {
    * equipo+ventana+fecha_corte). `conflicto` es la lista de columnas de esa
    * restricción, sintaxis de supabase-js `onConflict`. */
   upsert<T extends FilaBase>(tabla: string, datos: Record<string, unknown>, conflicto: string): Promise<T>;
+
+  /**
+   * Llama a una función de la base (RPC).
+   *
+   * Acá vive el cálculo de verdad — la Poisson, el log5, la regresión a la
+   * media, la calibración. Está en Postgres y no en el teléfono a propósito:
+   * es el mismo código que usa la IA desde la Edge Function, así que la
+   * pantalla y el chat no pueden darle números distintos al mismo lanzador.
+   * Duplicarlo en TypeScript sería garantizar que algún día se contradigan.
+   */
+  llamar<T>(funcion: string, argumentos?: Record<string, unknown>): Promise<T>;
 }

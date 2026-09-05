@@ -1,0 +1,96 @@
+-- Migración aplicada el 2026-08-29.
+--
+-- ============================================================
+-- "ME LO DEVUELVE COMO SI FUERA UN LOCO"
+-- ============================================================
+--
+-- Reporte del usuario, textual: la IA no le devuelve nada útil, no busca
+-- sola, y dice que no tiene suficientes datos "sabido que ya se le metió
+-- muchísimo dato en la base de datos, obviamente".
+--
+-- Tenía razón en todo. Reproducido con este mensaje:
+--
+--   "La banca todavía no tiró todas las líneas. Por ahora solo hay estas
+--    puestas: D CEASE 8, T SKUBAL 7.5, R DETMERS 6.5. Los demás juegos de
+--    hoy no tienen ponches puestos todavía. Decime qué hago."
+--
+-- Respuesta de la app:
+--
+--   "Para poder proyectar los ponches de cada lanzador necesito saber contra
+--    qué equipos batean hoy. ¿Podés decirme los rivales de Dylan Cease,
+--    Tarik Skubal y Riley Detmers?"
+--
+-- Y el detalle de herramientas: **herramientasUsadas: null**. Cero. No llamó
+-- a nada. Con 825 lanzadores cargados y tres nombres en la mano, devolvió
+-- una pregunta. Encima le erró el nombre: es Reid Detmers, no Riley.
+--
+-- ============================================================
+-- DOS CAUSAS, NINGUNA ERA "LA IA ES TONTA"
+-- ============================================================
+--
+-- 1. EL RIVAL NO ESTABA EN NINGÚN LADO. La app sabía todo de cada lanzador
+--    menos contra quién juega hoy. Sin eso hay que preguntarlo, y preguntar
+--    es lo único que podía hacer. El prompt incluso se lo pedía: "si falta
+--    un dato (rival, ...), preguntalo directo en una línea".
+--
+--    Es el mismo error que la mano del lanzador, una semana antes: un dato
+--    del mundo que no estaba guardado, y un modelo obligado a completarlo.
+--    Allá lo completó inventando; acá, preguntando. Las dos salidas son
+--    malas y las dos se arreglan igual — dándole de dónde sacarlo.
+--
+-- 2. SIN LÍNEA, proyectar_varios TIRABA LA FILA. Si `linea` venía nula, el
+--    lanzador se iba a `no_encontrados`, como si no existiera. Pero la línea
+--    la pone la casa, no nosotros. Que Star Sport no la haya puesto todavía
+--    no borra el K% del lanzador, ni cómo batea el rival, ni cuántos innings
+--    dura. Los ponches proyectados se calculan igual.
+--
+-- ============================================================
+-- QUÉ SE HIZO
+-- ============================================================
+--
+-- A. proyectar_varios acepta juegos SIN línea. Devuelve los ponches
+--    proyectados con veredicto SIN LINEA, sin veredicto contra la cuota
+--    porque no hay contra qué compararlos. La fila ya no se pierde.
+--
+--    De paso, el chequeo de desajuste de rol (relevista con línea de
+--    abridor) solo corre cuando hay línea: es la línea la que afirma "esto
+--    es un abridor". Sin línea no hay contradicción que marcar.
+--
+--    El orden: primero lo que tiene línea, por ganancia esperada; después lo
+--    que no la tiene, por ponches proyectados de mayor a menor — que es
+--    justo el orden en que conviene mirarlas cuando la casa abra.
+--
+-- B. Herramienta nueva en la Edge Function: `cartelera_de_hoy`. Trae el
+--    calendario oficial de la MLB con los abridores probables del día y, de
+--    cada juego, deduce el rival de cada abridor (el otro equipo de su
+--    propio juego). Después proyecta a todos de una.
+--
+--      GET statsapi.mlb.com/api/v1/schedule?sportId=1&date=YYYY-MM-DD
+--          &hydrate=probablePitcher,team
+--
+--    Con esto la IA no tiene que preguntar el rival nunca más, y cuando la
+--    banca todavía no tiró las líneas igual puede decir cuántos ponches
+--    proyecta cada abridor del día.
+--
+-- C. El prompt cambió de actitud. Antes decía "si falta un dato, preguntalo".
+--    Ahora arranca con:
+--
+--      REGLA NÚMERO UNO — ACTUÁ, NO PREGUNTES. Antes de preguntar CUALQUIER
+--      cosa, tenés que haber llamado a las herramientas. Preguntar sin haber
+--      llamado a nada es la peor respuesta posible: le devolvés el trabajo
+--      al que te lo pidió.
+--
+--    Con tres cosas que quedan prohibidas de preguntar (el rival, la mano, y
+--    las estadísticas de cualquiera) porque las tres ya están, y la orden
+--    explícita de no decir nunca que faltan datos para proyectar.
+--
+-- D. De tres lanzadores para arriba la respuesta va en TABLA. El prompt
+--    viejo decía "nada de tablas gigantes" y por eso nunca armaba una: se
+--    había escrito así porque el chat mostraba markdown como texto plano y
+--    una tabla llegaba como una pared de pipes. Eso se arregló del lado de
+--    la app (components/TextoRico.tsx), así que la razón ya no existe.
+--
+-- ============================================================
+--
+-- El contenido exacto está aplicado en la base; este archivo queda como
+-- registro.

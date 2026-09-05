@@ -79,6 +79,65 @@ const MODELOS_RAZONAMIENTO = (Deno.env.get("NVIDIA_MODELOS_TEXTO") ??
 // rival, armar el parlay, guardar).
 const MAX_RONDAS = 9;
 
+/**
+ * Cuánto se puede pasar juntando datos antes de tener que contestar.
+ *
+ * El tope de rondas solo cuenta vueltas, y una vuelta puede tardar 5 segundos
+ * o 40. Medido contra la función ya desplegada: "Skubal 6.5, decime la
+ * temporada, las últimas 5, cómo le va de visita, y si conviene" hizo cuatro
+ * vueltas y pasó los 120 segundos — del lado del usuario eso no es "tardó",
+ * es un error en la pantalla, que es exactamente lo que él viene reportando.
+ *
+ * Con esto, pasado el presupuesto se corta de llamar herramientas y se pide la
+ * respuesta con lo que ya está juntado. Vale más una respuesta con tres de las
+ * cuatro cosas que un error con las cuatro a medio hacer.
+ *
+ * 55s y no 85s: el corte para el ciclo de herramientas, pero DESPUÉS todavía
+ * hay que pedirle la respuesta final al modelo, y esa llamada también tarda —
+ * con todo lo juntado en el hilo, bastante. Con 85 el total se fue igual a
+ * 150s y el usuario volvió a ver un error. El presupuesto tiene que dejar
+ * lugar para contestar, no solo para buscar.
+ */
+const TOPE_MS_HERRAMIENTAS = 55000;
+
+/**
+ * Cuánto se le aguanta a UNA llamada al modelo de razonamiento.
+ *
+ * Es el mismo problema que el de visión, en otro lado, y costó dos intentos
+ * darse cuenta. Bajar el presupuesto de herramientas de 85s a 55s no cambió
+ * nada: la pregunta "demostrame que el sistema sirve" siguió pasándose de los
+ * 150 segundos. El tiempo no se iba en el ciclo — se iba DENTRO de una sola
+ * llamada.
+ *
+ * Estos son modelos de razonamiento: con max_tokens en 4000 y una pregunta
+ * abierta, uno solo puede pensar 4000 tokens antes de decir la primera
+ * palabra. A 40 tokens por segundo eso es 100 segundos en UNA llamada, y
+ * ningún tope que se mire "entre vueltas" lo va a atrapar.
+ *
+ * Con el corte, esa llamada se aborta y se pasa al modelo siguiente de la
+ * lista. Antes, un modelo pensando de más dejaba al usuario sin nada.
+ *
+ * Los 40s del primer intento resultaron DEMASIADO cortos: con este prompt de
+ * sistema (9 KB) y doce herramientas, los tres modelos se pasaron de 40s en
+ * la PRIMERA llamada, antes de ejecutar una sola herramienta, y la función
+ * devolvió 502. Las mediciones viejas de 1.6s eran con preguntas triviales.
+ *
+ * Así que el tope no puede ser un número fijo: el primero tiene que poder
+ * tomarse su tiempo, y el respaldo existe para ser rápido — si el respaldo
+ * también piensa un minuto, no sirve de respaldo. Y ninguno de los dos puede
+ * hacer que el total se pase del techo.
+ */
+const TOPE_MS_PRIMER_MODELO = 70000;
+const TOPE_MS_MODELO_RESPALDO = 30000;
+
+/**
+ * Techo de toda la respuesta. Debajo del límite de la Edge Function y de la
+ * paciencia de cualquiera mirando un celular. Lo que quede de este
+ * presupuesto es lo que se le puede dar a la llamada siguiente: así el corte
+ * de un intento nunca empuja el total por encima del techo.
+ */
+const TOPE_MS_TOTAL = 115000;
+
 /** Qué versión del sistema produce las confianzas de hoy. Ver picks.sistema. */
 const SISTEMA_ACTUAL = "PROYECCION";
 
@@ -208,7 +267,11 @@ const HERRAMIENTAS = [
               type: "object",
               properties: {
                 pitcher: { type: "string", description: "Nombre del lanzador, aunque venga abreviado" },
-                linea: { type: "number", description: "Línea de ponches de la casa, ej. 6.5" },
+                linea: {
+                  type: "number",
+                  description:
+                    "Línea de ponches de la casa. OMITILA si la casa todavía no la puso: igual se proyectan los ponches y la fila sale con veredicto SIN LINEA.",
+                },
                 rival: { type: "string", description: "Abreviación del equipo contrario, ej. NYY, CIN" },
                 mano: {
                   type: "string",
@@ -218,7 +281,7 @@ const HERRAMIENTAS = [
                 ventana_rival: { type: "string", enum: ["TEMPORADA", "ULTIMOS_14"] },
                 cuota: { type: "number", description: "Solo si esta línea tiene una cuota distinta" },
               },
-              required: ["pitcher", "linea"],
+              required: ["pitcher"],
             },
           },
           cuota: {
@@ -227,6 +290,38 @@ const HERRAMIENTAS = [
           },
         },
         required: ["juegos"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cartelera_de_hoy",
+      description:
+        "LOS JUEGOS DEL DÍA CON SUS ABRIDORES, del calendario oficial de la MLB, y las proyecciones de todos ya hechas. Usala SIEMPRE que falte saber contra quién lanza alguien, quién abre hoy, o cuando la casa todavía no puso las líneas. NUNCA le preguntes al usuario el rival de un lanzador: está acá. NUNCA digas que no tenés datos para proyectar sin línea: los ponches proyectados salen igual y esta herramienta te los da.",
+      parameters: {
+        type: "object",
+        properties: {
+          fecha: { type: "string", description: "YYYY-MM-DD. Si no se pasa, hoy." },
+          solo: {
+            type: "array",
+            items: { type: "string" },
+            description: "Opcional: apellidos a filtrar, si solo interesan algunos.",
+          },
+          lineas: {
+            type: "array",
+            description:
+              "Las líneas que la casa YA puso, si tenés alguna. Pasá solo el lanzador y su línea: el rival lo resuelve esta herramienta desde el calendario oficial. NO escribas vos el rival.",
+            items: {
+              type: "object",
+              properties: {
+                pitcher: { type: "string" },
+                linea: { type: "number" },
+              },
+              required: ["pitcher", "linea"],
+            },
+          },
+        },
       },
     },
   },
@@ -248,12 +343,30 @@ const HERRAMIENTAS = [
     function: {
       name: "historial_pitcher",
       description:
-        "Devuelve las salidas reales ya registradas de un lanzador (fecha, rival, IP, K, BB) y, si le pasás una línea, cuántas veces la superó. Esto es historial contado, no proyección.",
+        "Las salidas reales ya jugadas de un lanzador (fecha, rival, IP, K, BB, casa o visita) con filtros: temporada completa, últimas 5, últimas 10, solo en casa, solo de visita, o head-to-head contra un rival. Si le pasás la línea devuelve además cuántas veces la pasó, la racha, el promedio y la mediana. OJO: esto es CONTAR lo que ya pasó, no la probabilidad de que pase hoy — para eso está proyectar_ponches. Sirve para el contexto de al lado: rachas, si el rival lo domina, si un juego enorme le infla el promedio.",
       parameters: {
         type: "object",
         properties: {
           pitcher: { type: "string" },
-          linea: { type: "number", description: "Opcional: para contar cuántas veces la superó" },
+          linea: { type: "number", description: "Opcional: para contar cuántas veces la pasó" },
+          ventanas: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["TEMPORADA", "ULTIMAS_5", "ULTIMAS_10", "CASA", "VISITA", "H2H"],
+            },
+            description:
+              "PEDÍ TODAS LAS QUE NECESITES DE UNA VEZ, en esta lista. Si te preguntan por la temporada, las últimas 5 y cómo le va de visita, mandá las tres acá en UNA sola llamada — no hagas tres llamadas seguidas, que se te va el tiempo y el usuario se queda sin respuesta. Por defecto TEMPORADA.",
+          },
+          ventana: {
+            type: "string",
+            enum: ["TEMPORADA", "ULTIMAS_5", "ULTIMAS_10", "CASA", "VISITA", "H2H"],
+            description: "Una sola ventana, si con eso alcanza. Si necesitás varias usá 'ventanas'.",
+          },
+          rival: {
+            type: "string",
+            description: "Abreviatura del equipo rival. Obligatorio si pedís la ventana H2H.",
+          },
         },
         required: ["pitcher"],
       },
@@ -275,6 +388,11 @@ const HERRAMIENTAS = [
           k: { type: "number" },
           bb: { type: "number" },
           pitcheos: { type: "number" },
+          es_local: {
+            type: "boolean",
+            description:
+              "true si lanzó en su estadio, false si fue de visita. Mandalo siempre que el boxscore lo diga: es lo que después permite filtrar casa/visita.",
+          },
         },
         required: ["pitcher", "fecha", "rival", "ip", "k", "bb"],
       },
@@ -394,6 +512,24 @@ const HERRAMIENTAS = [
   {
     type: "function",
     function: {
+      name: "backtest",
+      description:
+        "Corre el modelo hacia atrás sobre las 3.658 salidas reales de la temporada, caminando hacia adelante (para cada salida usa SOLO las anteriores de ese lanzador, nunca lo que pasó después). Devuelve la curva de calibración: qué confianza declaró y qué pasó de verdad. Usalo cuando pregunte si los números sirven, si el sistema es confiable, o por qué se le bajan las confianzas. LEÉ Y CITÁ el campo ESTAR_CALIBRADO_NO_ES_GANAR_PLATA antes de sacar conclusiones: la tasa general está inflada por líneas regaladas y lo único que se puede leer es 'zona_de_decision' y la curva.",
+      parameters: {
+        type: "object",
+        properties: {
+          peso_ancla: {
+            type: "number",
+            description:
+              "En cuántas salidas equivalentes pesa la media de liga al regresar a la media. 6 es lo que usa la app; 0 es creerle entero al promedio crudo del lanzador. Sirve para mostrar que regresar a la media mejora la calibración.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "buscar_web",
       description:
         "Busca en internet datos actuales que no estén en la base: lineup confirmado de hoy, clima, lesiones, noticias. No lo uses para estadísticas de temporada, esas ya están guardadas.",
@@ -440,6 +576,94 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
       return data;
     }
 
+    case "cartelera_de_hoy": {
+      const fecha = args.fecha ?? new Date().toISOString().slice(0, 10);
+      const url =
+        `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${fecha}` +
+        `&hydrate=probablePitcher,team` +
+        `&fields=dates,games,gameDate,teams,away,home,team,abbreviation,probablePitcher,fullName`;
+      let juegos: Array<Record<string, unknown>> = [];
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) return { error: `El calendario de la MLB respondió ${resp.status}.` };
+        const datos = await resp.json();
+        for (const d of datos?.dates ?? []) {
+          for (const g of d?.games ?? []) {
+            const v = g?.teams?.away, l = g?.teams?.home;
+            juegos.push({
+              hora: g?.gameDate,
+              visitante: v?.team?.abbreviation ?? null,
+              local: l?.team?.abbreviation ?? null,
+              abridor_visitante: v?.probablePitcher?.fullName ?? null,
+              abridor_local: l?.probablePitcher?.fullName ?? null,
+            });
+          }
+        }
+      } catch (e) {
+        return { error: `No pude leer el calendario: ${(e as Error).message}` };
+      }
+
+      // Cada abridor con su rival, que es el otro equipo de su propio juego.
+      // Esto es justamente lo que la IA no tenía y por eso preguntaba.
+      const paraProyectar: Array<{ pitcher: string; rival: string }> = [];
+      for (const j of juegos) {
+        if (j.abridor_visitante) {
+          paraProyectar.push({ pitcher: j.abridor_visitante as string, rival: j.local as string });
+        }
+        if (j.abridor_local) {
+          paraProyectar.push({ pitcher: j.abridor_local as string, rival: j.visitante as string });
+        }
+      }
+
+      // Las líneas se pegan por apellido contra el abridor del calendario. El
+      // rival sale SIEMPRE de acá, nunca de lo que haya escrito el modelo:
+      // ya pasó que copió "LAD" como rival de Skubal, que es de LAD.
+      const lineas = (args.lineas ?? []) as Array<{ pitcher: string; linea: number }>;
+      const conLinea = new Map<string, number>();
+      const sinPegar: string[] = [];
+      for (const l of lineas) {
+        const buscado = String(l.pitcher ?? "").toLowerCase().trim();
+        if (!buscado) continue;
+        const apellido = buscado.split(/\s+/).pop() ?? buscado;
+        const encontrado = paraProyectar.find((p) => {
+          const nombre = p.pitcher.toLowerCase();
+          return nombre.includes(buscado) || nombre.split(/\s+/).pop() === apellido;
+        });
+        if (encontrado) conLinea.set(encontrado.pitcher, l.linea);
+        else sinPegar.push(l.pitcher);
+      }
+
+      const filtro = (args.solo ?? []) as string[];
+      let elegidos: Array<{ pitcher: string; rival: string; linea?: number }> = paraProyectar;
+      if (filtro.length) {
+        elegidos = elegidos.filter((p) =>
+          filtro.some((f) => p.pitcher.toLowerCase().includes(String(f).toLowerCase())));
+      }
+      elegidos = elegidos.map((p) =>
+        conLinea.has(p.pitcher) ? { ...p, linea: conLinea.get(p.pitcher) } : p);
+
+      if (elegidos.length === 0) {
+        return { fecha, juegos, mensaje: "El calendario todavía no tiene abridores anunciados." };
+      }
+
+      const { data, error } = await supabase.rpc("proyectar_varios", {
+        p_juegos: elegidos,
+        p_cuota: args.cuota ?? -130,
+        p_sistema: SISTEMA_ACTUAL,
+      });
+      if (error) return { fecha, juegos, error: error.message };
+      return {
+        fecha,
+        cantidad_juegos: juegos.length,
+        juegos,
+        lineas_sin_pegar: sinPegar,
+        proyecciones: data,
+        como_leer:
+          "El rival de cada uno sale del calendario oficial: usalo tal cual, no lo reescribas. " +
+          "Si algo quedó en lineas_sin_pegar es que ese lanzador no figura abriendo hoy — decilo.",
+      };
+    }
+
     case "buscar_pitcher": {
       const { data, error } = await supabase.rpc("buscar_pitcher", {
         texto_busqueda: args.nombre ?? "",
@@ -452,52 +676,51 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
     }
 
     case "historial_pitcher": {
-      const pitcher = await nombreReal(supabase, args.pitcher);
-      const { data, error } = await supabase
-        .from("game_logs")
-        .select("fecha, rival, ip, k, bb, pitcheos")
-        .eq("pitcher", pitcher)
-        .order("fecha", { ascending: false })
-        .limit(20);
-      if (error) return { error: error.message };
+      // El conteo lo hace la base, no acá.
+      //
+      // Antes esto traía las filas y contaba en TypeScript. La pantalla de
+      // Buscar Lanzador cuenta lo mismo llamando a historial_lanzador, y dos
+      // implementaciones del mismo conteo terminan dando números distintos
+      // para el mismo lanzador — el día que pase, el usuario no va a saber a
+      // cuál creerle. Una sola función, los dos la llaman.
+      //
+      // Las ventanas van en paralelo y en una sola llamada de herramienta.
+      // Pedirlas de a una era una vuelta al modelo por cada una, y con eso
+      // "temporada + últimas 5 + de visita" se pasaba de los 120 segundos.
+      const pedidas: string[] = Array.isArray(args.ventanas) && args.ventanas.length > 0
+        ? args.ventanas.map((v: unknown) => String(v))
+        : [args.ventana ?? "TEMPORADA"];
+      const ventanas = [...new Set(pedidas)].slice(0, 6);
 
-      const salidas = data ?? [];
-      if (salidas.length === 0) {
-        return {
-          pitcher,
-          salidas_registradas: 0,
-          mensaje: "No hay salidas registradas todavía. Se agregan con guardar_salida.",
-        };
-      }
-      let conteo = null;
-      if (args.linea !== undefined && args.linea !== null) {
-        const linea = Number(args.linea);
-        const arriba = salidas.filter((s: any) => Number(s.k) > linea).length;
-        const empates = Number.isInteger(linea)
-          ? salidas.filter((s: any) => Number(s.k) === linea).length
-          : 0;
-        conteo = {
-          linea,
-          veces_por_encima: arriba,
-          veces_por_debajo: salidas.length - arriba - empates,
-          empates,
-          total: salidas.length,
-          advertencia: salidas.length < 5 ? "Menos de 5 salidas: no es confiable todavía." : null,
-        };
-      }
-      return { pitcher, salidas_registradas: salidas.length, salidas, conteo_contra_linea: conteo };
+      const resultados = await Promise.all(
+        ventanas.map(async (v) => {
+          const { data, error } = await supabase.rpc("historial_lanzador", {
+            p_pitcher: args.pitcher ?? "",
+            p_linea: args.linea ?? null,
+            p_ventana: v,
+            p_rival: args.rival ?? null,
+          });
+          return [v, error ? { error: error.message } : data] as const;
+        }),
+      );
+
+      if (resultados.length === 1) return resultados[0][1];
+      return Object.fromEntries(resultados);
     }
 
     case "guardar_salida": {
       const pitcher = await nombreReal(supabase, args.pitcher);
+      // El rival va tal cual: un trigger de la tabla lo pasa a la abreviatura
+      // canónica, sepa el modelo escribirla o no ("AZ", "OAK", "Rockies").
       const { error } = await supabase.from("game_logs").insert({
         pitcher,
         fecha: args.fecha,
-        rival: String(args.rival).toUpperCase(),
+        rival: String(args.rival ?? ""),
         ip: args.ip,
         k: args.k,
         bb: args.bb,
         pitcheos: args.pitcheos ?? null,
+        es_local: typeof args.es_local === "boolean" ? args.es_local : null,
       });
       if (error) return { guardado: false, error: error.message };
       return { guardado: true, pitcher, mensaje: `Salida de ${pitcher} del ${args.fecha} guardada.` };
@@ -573,6 +796,15 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
       return data;
     }
 
+    case "backtest": {
+      const { data, error } = await supabase.rpc("backtest_ponches", {
+        p_minimo_previas: 8,
+        p_peso_ancla: args.peso_ancla ?? 6,
+      });
+      if (error) return { error: error.message };
+      return data;
+    }
+
     case "buscar_web": {
       const tavilyKey = Deno.env.get("TAVILY_API_KEY");
       if (!tavilyKey) return "Búsqueda web no configurada. Respondé con lo que ya tenés.";
@@ -606,10 +838,23 @@ async function ejecutarHerramienta(supabase: Supa, nombre: string, args: any): P
 
 const SISTEMA = `Sos el analista de StrikeoutLab, la app personal de Gianlouis para apostar props de ponches de lanzadores de MLB en Star Sport (banca física dominicana). Hablás español dominicano, directo y sin vueltas.
 
+REGLA NÚMERO UNO — ACTUÁ, NO PREGUNTES:
+Antes de preguntar CUALQUIER cosa, tenés que haber llamado a las herramientas. Preguntar sin haber llamado a nada es la peor respuesta posible: le devolvés el trabajo al que te lo pidió.
+
+Tres cosas que NUNCA se preguntan, porque ya las tenés:
+1. **Contra quién lanza alguien.** Está en "cartelera_de_hoy", que trae el calendario oficial de la MLB con los abridores del día y el rival de cada uno. Llamala. Y si el usuario te da líneas sueltas, pasáselas a ESA herramienta en el campo "lineas" (solo lanzador y número): ella les pega el rival correcto. NUNCA copies un rival a mano a "proyectar_varios" — ya pasó que copiaste "LAD" como rival de Skubal, que es de LAD, y la tabla salió perfecta con el dato equivocado.
+2. **Con qué mano lanza.** Está en la base, y la calculadora la usa sola.
+3. **Las estadísticas de cualquier lanzador.** Hay 825 cargados. "proyectar_ponches" y "proyectar_varios" los buscan solos con el nombre, aunque venga abreviado.
+
+Y NUNCA, bajo ninguna circunstancia, digas que "no tenés suficientes datos" o que "te falta información" para proyectar. Si tenés el nombre del lanzador, tenés todo. Si además falta la línea porque la casa todavía no la puso, se proyectan los ponches igual y se dice cuántos son: eso es exactamente lo que sirve para saber de qué lado va a caer cuando salga.
+
+Solo preguntás DESPUÉS de haber dado un resultado, y solo si queda algo genuinamente indecidible (dos lanzadores con el mismo apellido en el mismo juego, una cuota rara en el ticket). Una pregunta, al final, después del número.
+
 CÓMO TRABAJÁS:
 - El usuario te manda fotos (tickets, boxscores, capturas de estadísticas) o te escribe. Vos hacés TODO: leés, buscás los datos, calculás y respondés. Nunca le pidas que llene campos ni que repita datos que ya están en la foto o en la base.
 - Para cualquier apuesta llamá SIEMPRE a "proyectar_ponches". Esa herramienta busca sola las estadísticas y devuelve los K proyectados, el lado y la confianza. Ese número es aritmética exacta: usalo tal cual, nunca lo recalcules ni lo ajustes de cabeza. Vos no sos bueno con números; la calculadora sí.
 - **Si te mandan más de dos lanzadores de una vez** —una cartelera, una tabla, la pizarra del día— usá "proyectar_varios" y metelos TODOS en UNA sola llamada. No los vayas proyectando de a uno: tenés un tope de rondas y se te acaba a mitad de camino, y él se queda sin respuesta habiendo mandado todo. En una tabla con dos equipos y dos lanzadores por fila, el primer lanzador es del primer equipo y el segundo del segundo; el rival de cada uno es el otro equipo de su fila. Poné siempre el rival: es lo que distingue dos lanzadores con el mismo apellido.
+- Si la casa todavía no puso las líneas, llamá igual a "proyectar_varios" (o a "cartelera_de_hoy") SIN el campo linea. Devuelve los ponches proyectados de cada uno con veredicto SIN LINEA. Mostralos: es lo que le permite tener la opinión lista antes de que la casa abra.
 - Lo que "proyectar_varios" devuelve con veredicto REVISAR NO se recomienda ni entra en un parlay, aunque tenga la ganancia esperada más alta de la lista. Justamente cuando un dato no cierra es cuando el número se ve mejor. Leé el campo "revisar", decilo en una línea y preguntá lo que haga falta para destrabarlo.
 - Si la foto es de un juego YA TERMINADO (boxscore con resultados), guardá esa salida con "guardar_salida" sin que te lo pidan, y después contá qué guardaste. Así se alimenta el historial real.
 - Si es un ticket o una línea de un juego que todavía no se juega, proyectá y dale tu recomendación.
@@ -618,6 +863,9 @@ CÓMO TRABAJÁS:
 - Si el ticket tiene una cuota distinta de -130, volvé a llamar a "proyectar_ponches" pasándole esa cuota, no calcules aparte.
 - NUNCA busques ni adivines con qué mano lanza alguien, y NUNCA pases "mano_pitcher". La base ya la tiene para 823 lanzadores y la calculadora la usa sola. Esto es una regla dura porque ya pasó: buscaste en la web la mano de Cam Schlittler, no la sacaste, pasaste LHP para un DERECHO, y salió una proyección coherente con la mano equivocada. Un dato de entrada falso no se ve en la tarjeta.
 - Para cualquier combinada, llamá a "evaluar_parlay". Nunca multipliques confianzas de cabeza ni digas "las dos al 85% dan 85%".
+- Hay historial real cargado: 3.658 salidas de 224 abridores, temporada completa. Cuando pregunte "¿cómo viene?", "¿cuántas veces la pasó?", "¿cómo le va contra ese equipo?", "¿en casa o de visita?", llamá a "historial_pitcher". No digas nunca que no hay historial sin haberlo llamado.
+- Si te piden varias ventanas del historial (la temporada Y las últimas 5 Y de visita), pedilas TODAS JUNTAS en el campo "ventanas" de UNA sola llamada. Tres llamadas seguidas son tres vueltas, se pasa del tiempo y el usuario ve un error en vez de la respuesta. Lo mismo vale en general: agrupá, no vayas de a uno.
+- El historial y la proyección NO son lo mismo y no se mezclan. "7 de 10 (70%)" es contar lo que ya pasó: no sabe contra quién lanza hoy, no corrige por muestra chica y no sabe que al -130 hay que acertar 56.5% para no perder. La probabilidad que se apuesta es la de "proyectar_ponches". Si citás la tasa histórica, decí de una que es historial, y no la uses jamás como si fuera la probabilidad de hoy.
 
 CÓMO RESPONDÉS:
 - Empezá por el resultado, no por el proceso: "deGrom vs CIN, línea 7: proyecta 7.9 K → OVER. Al -130 eso CONVIENE: 9.7 centavos de ganancia por peso."
@@ -628,7 +876,15 @@ CÓMO RESPONDÉS:
 - Si la calculadora devuelve advertencias (muestra chica, empate probable, nombre ambiguo, faltan datos), decilas. No las escondas.
 - Cuando "ajuste_por_muestra" muestre que el K% ajustado quedó lejos del crudo, citá SIEMPRE el ajustado y explicá por qué en una línea: con pocos bateadores enfrentados el número crudo es suerte, no habilidad. Nunca digas el K% crudo como si fuera la tasa real del lanzador.
 - Si algo no se puede saber, decilo claro. Nunca inventes una estadística ni un lineup.
-- Nada de tablas gigantes ni respuestas de tres pantallas: es una app de celular, andá al grano.
+- **DE TRES LANZADORES PARA ARRIBA, LA RESPUESTA VA EN TABLA.** Siempre. Un párrafo por lanzador es ilegible en un celular y es justo lo que no sirve. Tabla de markdown, columnas cortas, lo mejor arriba:
+
+| Lanzador | Rival | Línea | Proy | Lado | Conf | ¢/peso | Veredicto |
+|---|---|---|---|---|---|---|---|
+| Cease (TOR) | SEA | 8 | 8.87 | OVER | 54.6% | −3.0 | NO CONVIENE |
+| Skubal (LAD) | DET | — | 7.60 | — | — | — | SIN LÍNEA |
+
+Con línea: llená todo. Sin línea: guion en las columnas que no aplican y "SIN LÍNEA" en veredicto — la fila NO se omite, los ponches proyectados son el dato. Debajo de la tabla, dos o tres renglones con la conclusión y lo que haya que revisar. Nada más.
+- Para uno o dos lanzadores, prosa corta: es una app de celular, andá al grano.
 
 NO TE QUEDES CALLADO — ESTA ES LA PARTE QUE MÁS IMPORTA:
 Gianlouis te da la información y vos hacés el trabajo, pero eso no es contestar y callarte. Después de dar el resultado, SIEMPRE seguís la conversación con algo útil, y la seguís hasta que él diga que ya está. Cerrá cada respuesta con una sugerencia concreta o una pregunta, nunca con un punto final seco.
@@ -636,7 +892,7 @@ Gianlouis te da la información y vos hacés el trabajo, pero eso no es contesta
 Qué ofrecer, según el caso:
 - **Si recomendás menos patas de las que él quiere**, no te limites a decir que no. Ofrecé la salida de dos tickets: "la escalera dice que lo óptimo son 3 patas — armá ese, que es el que la matemática banca, y si querés jugar más, hacé un segundo ticket aparte con las que vos elijas y jugalo con menos plata. Así el bueno no se contamina con el arriesgado." Y decile cuáles son las patas más seguras y cuáles las que él estaría metiendo por gusto.
 - **Si un pick queda FLOJO o NO CONVIENE**, ofrecé alternativas: otro lanzador del mismo día, la línea del otro lado, o esperar. Preguntale si quiere que revises los demás juegos de la fecha.
-- **Si falta un dato** (rival, mano del lanzador, cuota distinta, si la línea es entera o con medio punto), preguntalo directo en una línea. Una pregunta a la vez, no un cuestionario.
+- **Si falta un dato, PRIMERO buscalo.** El rival sale de "cartelera_de_hoy"; las estadísticas y la mano, de la calculadora; el lineup confirmado o una lesión, de "buscar_web". Recién si después de buscar sigue sin poder decidirse, preguntá — una sola cosa, al final, después de haber dado el número que sí pudiste dar.
 - **Si el resultado depende de un supuesto** (lineup no confirmado, lanzador con muestra chica, cambio de equipo), decilo y ofrecé buscarlo en la web.
 - **Si el pick es bueno**, ofrecé guardarlo, o preguntá si quiere que le busques con qué combinarlo.
 - **Si él insiste en algo que la matemática no banca** (12 patas, un pick de 56%), no discutas dos veces: dijiste tu parte, ahora dale lo que pide bien hecho — el número real de esa jugada, cuánto arriesgar para que no lo funda, y qué versión más segura tiene al lado.
@@ -646,6 +902,8 @@ REGLAS DURAS:
 - Una línea entera (ej. 7) puede terminar en empate y devuelven la plata: tenelo en cuenta al recomendar, y avisá que en parlay eso depende de qué haga Star Sport con la pata.
 - El corte no es la confianza, es la cuota: al -130 hace falta 56.5% para empatar. "Conviene" lo dice evaluar_apuesta, no vos.
 - La calibración se mide POR SISTEMA. El sistema de ahora es PROYECCION y todavía no tiene picks con resultado, así que su confianza se comprime al 35% de su distancia al 50% — no por castigo, sino porque sin historial no hay con qué sostener más: al -130 el equilibrio está en 56.5% y la casa se queda con ~13%, así que una ventaja grande de verdad no existe. El puntuador viejo (HEURISTICO) sacó 3 de 13 declarando 81%; eso NO se hereda, es otro método, pero si él pregunta por qué bajás los números llamá a "calibracion_real" y mostrale las dos cosas.
+- Si pregunta si el sistema sirve, llamá a "backtest". Corre el modelo sobre las 3.658 salidas reales caminando hacia adelante: para cada salida usa solo las anteriores de ese lanzador, nunca lo que pasó después. En la zona donde se apuesta de verdad (52%-66%) declaró 58.8% y pasó 58.7% sobre 2.965 apuestas. Eso significa que cuando el modelo dice un número, ese número es honesto.
+- **Pero estar calibrado NO es tener ventaja, y esto no se dice a medias.** La tasa general del backtest (~72%) está inflada porque se evaluó contra líneas fijas: acertarle el over de 4.5 a alguien que promedia 8 ponches es gratis, y esa apuesta no existe al -130. Star Sport pone la línea justo donde la probabilidad real queda pegada al 50%. Si citás el backtest, citá SIEMPRE la zona de decisión y la advertencia, nunca el 72% suelto. Y si él pregunta si eso permite subir las confianzas: no. Lo único que las destraba es guardar picks y anotar el resultado.
 - Cada pick que se guarde alimenta la calibración del sistema nuevo. Si él quiere números menos castigados, la salida es cargar resultados, no subir la confianza: decíselo así.
 - El valor esperado de un parlay SUBE con cada pata y aun así te funde: son cosas distintas. Si citás el valor esperado de un parlay largo, citá al lado la mediana y la probabilidad de fundirte, o estás mintiendo por omisión.
 - Si el nombre del lanzador es ambiguo (la calculadora te avisa), preguntá cuál es antes de dar la recomendación por buena.`;
@@ -722,6 +980,7 @@ Deno.serve(async (req: Request) => {
     mensajes.push({ role: "user", content: contenido || "(sin texto)" });
   }
 
+  const arranque = Date.now();
   const herramientasUsadas: Array<{ nombre: string; argumentos: unknown; resultado: unknown }> = [];
   let respuestaFinal = "";
   let razonamiento: string | null = null;
@@ -731,10 +990,22 @@ Deno.serve(async (req: Request) => {
   // dejar al usuario sin respuesta.
   async function pedirAlModelo(conHerramientas = true): Promise<any> {
     let ultimoError = "";
-    for (const modelo of MODELOS_RAZONAMIENTO) {
+    for (const [i, modelo] of MODELOS_RAZONAMIENTO.entries()) {
+      // Lo que le toca a este intento: su tope, pero nunca más de lo que
+      // queda del presupuesto total. Si ya no queda nada, no se intenta —
+      // arrancar una llamada que no puede terminar solo garantiza el error.
+      const queda = TOPE_MS_TOTAL - (Date.now() - arranque);
+      const tope = Math.min(i === 0 ? TOPE_MS_PRIMER_MODELO : TOPE_MS_MODELO_RESPALDO, queda);
+      if (tope < 5000) {
+        ultimoError = `se acabó el tiempo antes de poder probar ${modelo}`;
+        break;
+      }
+      const corte = new AbortController();
+      const reloj = setTimeout(() => corte.abort(), tope);
       try {
         const resp = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
           method: "POST",
+          signal: corte.signal,
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: modelo,
@@ -743,7 +1014,7 @@ Deno.serve(async (req: Request) => {
               ? { tools: HERRAMIENTAS, tool_choice: "auto" }
               : { tool_choice: "none" }),
             temperature: 0.3,
-            max_tokens: 4000,
+            max_tokens: 2000,
           }),
         });
         if (!resp.ok) {
@@ -753,14 +1024,43 @@ Deno.serve(async (req: Request) => {
         modeloEnUso = modelo;
         return await resp.json();
       } catch (e) {
-        ultimoError = `${modelo}: ${(e as Error).message}`;
+        ultimoError = corte.signal.aborted
+          ? `${modelo} pasó de ${Math.round(tope / 1000)}s pensando y se cortó`
+          : `${modelo}: ${(e as Error).message}`;
+      } finally {
+        clearTimeout(reloj);
       }
     }
-    throw new Error(`Ningún modelo pudo responder. Último problema: ${ultimoError}`);
+    // Este texto lo lee el usuario en la pantalla, así que dice qué hacer y
+    // no solo qué falló.
+    throw new Error(
+      `Los modelos están lentos ahora mismo y ninguno llegó a contestar a tiempo. ` +
+        `Probá de nuevo en un minuto, o pedime menos cosas de una vez. (${ultimoError})`,
+    );
   }
+
+  let seCortoPorTiempo = false;
+
+  // Lo mismo, pedido dos veces, no se ejecuta dos veces.
+  //
+  // Verificado en la función desplegada: ante "demostrame que el sistema
+  // sirve" el modelo llamó a backtest TRES veces y a calibracion_real DOS,
+  // todas con los mismos argumentos. Cada una es una vuelta perdida y, peor,
+  // mete otra copia del mismo JSON grande en el hilo, así que la vuelta
+  // siguiente arranca más pesada que la anterior. Se responde de la memoria y
+  // se le dice al modelo que ya lo tiene, que es la información que le
+  // faltaba para dejar de pedirlo.
+  const yaEjecutadas = new Map<string, unknown>();
 
   try {
     for (let ronda = 0; ronda < MAX_RONDAS; ronda++) {
+      // El presupuesto se mira ANTES de pedir otra vuelta: si ya casi no
+      // queda tiempo, arrancar una vuelta más garantiza el timeout en vez de
+      // evitarlo.
+      if (ronda > 0 && Date.now() - arranque > TOPE_MS_HERRAMIENTAS) {
+        seCortoPorTiempo = true;
+        break;
+      }
       const datos = await pedirAlModelo();
       const mensaje = datos?.choices?.[0]?.message as NvidiaMensaje | undefined;
       if (!mensaje) throw new Error("El modelo devolvió una respuesta sin mensaje.");
@@ -775,7 +1075,20 @@ Deno.serve(async (req: Request) => {
           } catch {
             args = {};
           }
-          const resultado = await ejecutarHerramienta(supabase, llamada.function.name, args);
+          const huella = `${llamada.function.name}:${JSON.stringify(args)}`;
+          let resultado: unknown;
+          if (yaEjecutadas.has(huella)) {
+            resultado = {
+              repetida: true,
+              aviso:
+                `Ya llamaste a "${llamada.function.name}" con estos mismos argumentos y el ` +
+                "resultado está más arriba en esta conversación. No lo pidas de nuevo: usalo y contestá.",
+              resultado_anterior: yaEjecutadas.get(huella),
+            };
+          } else {
+            resultado = await ejecutarHerramienta(supabase, llamada.function.name, args);
+            yaEjecutadas.set(huella, resultado);
+          }
           herramientasUsadas.push({ nombre: llamada.function.name, argumentos: args, resultado });
           mensajes.push({
             role: "tool",
@@ -797,10 +1110,14 @@ Deno.serve(async (req: Request) => {
     if (!respuestaFinal) {
       mensajes.push({
         role: "user",
-        content:
-          "Se acabó el tiempo de buscar datos. Contestá ahora con lo que ya tenés, " +
-          "sin llamar más herramientas. Si te faltaron lanzadores, decí cuáles quedaron " +
-          "afuera y ofrecé seguir con esos.",
+        content: seCortoPorTiempo
+          ? "Se acabó el tiempo de buscar datos. Contestá AHORA con lo que ya juntaste, " +
+            "sin llamar más herramientas. Dale al usuario todo lo que sí tenés — no le " +
+            "devuelvas una disculpa. Al final, en un renglón, decí qué quedó sin mirar y " +
+            "ofrecé seguir con eso."
+          : "Se acabó el tiempo de buscar datos. Contestá ahora con lo que ya tenés, " +
+            "sin llamar más herramientas. Si te faltaron lanzadores, decí cuáles quedaron " +
+            "afuera y ofrecé seguir con esos.",
       });
       try {
         const datos = await pedirAlModelo(false);
