@@ -703,3 +703,145 @@ tbody tr:nth-child(even) {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Responsive: teléfono, tablet y escritorio ---------- */
+/*
+ * El equivalente web de elegir el layout "por idioma de dispositivo"
+ * (OnIdiom en MAUI, size classes en iOS): acá no hay una API que diga "esto
+ * es una tablet", así que se infiere del ancho disponible con @media
+ * queries. Dos puntos de quiebre alcanzan:
+ *
+ *   < 768px   celular: una columna, navegación abajo al alcance del pulgar.
+ *   >= 768px  tablet y escritorio: navegación lateral fija, como Gmail o
+ *             Notion. Una barra de pestañas abajo en una pantalla ancha se
+ *             ve como una app de teléfono estirada, no como una de escritorio.
+ *
+ * El texto (formularios, avisos, tarjetas sueltas) se limita a un ancho de
+ * lectura cómodo aunque la ventana sea enorme: una línea de 1400px es tan
+ * incómoda de leer como una de 200px. Las listas de tarjetas (`.grilla`) sí
+ * usan el espacio de sobra agregando columnas solas.
+ */
+
+@media (min-width: 768px) {
+  .app {
+    flex-direction: row;
+    max-width: none;
+    margin: 0;
+  }
+
+  /* `order: -1` la manda a la izquierda visualmente sin moverla en el HTML:
+     en el DOM sigue después del contenido, así que un lector de pantalla
+     encuentra primero lo que la persona vino a leer, y la navegación queda
+     como un punto de referencia aparte en vez de lo primero que se anuncia. */
+  .barra {
+    order: -1;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 224px;
+    height: 100%;
+    flex-shrink: 0;
+    padding: 20px 12px;
+    gap: 4px;
+    border-top: none;
+    border-right: 1px solid var(--borde);
+  }
+
+  .barra button {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 11px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  .barra button .icono {
+    width: 24px;
+    height: 24px;
+    font-size: 16px;
+  }
+
+  .barra button[aria-current="page"] {
+    background: color-mix(in srgb, var(--acento) 14%, transparent);
+  }
+
+  .barra button[aria-current="page"] .icono {
+    background: none;
+  }
+
+  .contenido {
+    padding: 28px 32px;
+  }
+
+  /* Todo lo que no sea una grilla de tarjetas se centra y se topa en un
+     ancho de lectura cómodo, aunque el panel de contenido sea mucho más
+     ancho: un formulario o un aviso son texto, y estirarlos de punta a
+     punta de un monitor los hace difíciles de leer. */
+  .contenido > :not(.grilla) {
+    width: 100%;
+    max-width: 720px;
+    align-self: center;
+  }
+
+  .burbujas,
+  .escribir {
+    width: 100%;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+}
+
+@media (min-width: 768px) and (hover: hover) {
+  /* Sin el chequeo de hover, en una tablet táctil el estado hover del
+     último botón tocado quedaría "pegado" hasta el próximo toque en otro
+     lado — un efecto raro que no pasa con mouse. */
+  .barra button:hover {
+    background: var(--tarjeta-elevada);
+  }
+  button.tarjeta:hover {
+    border-color: color-mix(in srgb, var(--acento) 45%, transparent);
+  }
+}
+
+@media (min-width: 1120px) {
+  .barra {
+    width: 264px;
+    padding: 28px 16px;
+  }
+
+  .contenido {
+    padding: 36px 48px;
+  }
+}
+
+@media (min-width: 1400px) {
+  /* Tope generoso para monitores ultra anchos: sin esto una grilla de
+     tarjetas se estiraría a seis columnas de huecos en vez de leerse como
+     una pantalla de escritorio normal.
+     `width: 100%` es obligatorio acá: `.contenido` es un ítem flex dentro
+     de un contenedor en columna, y un margen `auto` en un ítem flex
+     CANCELA el `stretch` por defecto — sin el ancho explícito, el elemento
+     se encoge a lo que ocupe su contenido en vez de llenar el espacio
+     disponible hasta el tope. Se detectó midiendo el DOM real: a 1440px de
+     ventana el panel quedaba en 555px, no en los ~1150px esperados. */
+  .contenido {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+}
+
+/* Grilla de tarjetas: la usan las pantallas con listas del mismo tipo de
+   tarjeta (picks del historial, ranking de rivales, abridores destacados,
+   el menú de "Más"). `auto-fill` con un mínimo de 280px hace que en un
+   celular angosto quede en una sola columna sola —sin esto habría que
+   repetir la misma media query en cada pantalla con una lista— y en una
+   tablet o un monitor agregue columnas solo cuando entran de verdad. */
+.grilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+}

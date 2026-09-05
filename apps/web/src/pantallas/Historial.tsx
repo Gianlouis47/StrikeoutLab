@@ -141,6 +141,7 @@ export function Historial() {
 
       {picks.length > 0 && <Seccion>Todos los picks</Seccion>}
 
+      <div className="grilla">
       {picks.map((p) => {
         const abierto = editando === p.id;
         return (
@@ -235,6 +236,7 @@ export function Historial() {
           </div>
         );
       })}
+      </div>
 
       {picks.length > 0 && (
         <button className="enlace apagado" onClick={() => void cargar()}>

@@ -64,15 +64,37 @@ npm run web                              # http://localhost:5173
 
 ## Publicarla en Vercel
 
-1. Importar el repo en Vercel. `vercel.json` en la raíz ya tiene el comando de
-   build y el directorio de salida, así que no hay que configurar nada más.
-2. En **Settings → Environment Variables**, cargar:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_PUBLISHABLE_KEY`
+Ya está publicada y atada al repo: cada push a `master` la despliega sola.
 
-   Tienen que empezar con `VITE_` o Vite no las mete en el bundle. Las dos son
-   seguras de exponer: Supabase las diseñó para ir en el cliente, y la
-   protección real es RLS + autenticación.
+No hay variables de entorno que cargar a mano. `apps/web/.env.production` está
+versionado (con una excepción explícita en `.gitignore`) y trae la URL y la
+clave **publishable** de Supabase, que están diseñadas para ir en el navegador
+y ya viajan dentro del bundle que descarga cualquiera que abra la app. Lo que
+protege los datos no es esconder esa clave, es el RLS — ver más abajo. La
+`service_role` key no está ahí ni va a estar: esa sí pasa por encima del RLS y
+vive solo en las variables de la Edge Function.
+
+Para levantar el proyecto de cero en otra cuenta de Vercel: importar el repo y
+listo. `vercel.json` en la raíz ya tiene el comando de build, el directorio de
+salida, el rewrite a `index.html` y el `Cache-Control` de `sw.js`. Lo único que
+hay que tocar a mano es **desactivar Vercel Authentication** (Settings →
+Deployment Protection), o el sitio pide login de Vercel para abrirse y no se
+puede instalar en un teléfono.
+
+## Quién puede entrar
+
+Estar registrado en Supabase **no alcanza**. Hay una lista blanca
+(`usuarios_permitidos`) y las políticas de RLS de las siete tablas de datos
+exigen estar en ella; a esa tabla no se puede escribir desde el cliente, así
+que nadie se agrega solo. Un registrado que no esté en la lista ve **0 filas** y
+no puede escribir nada.
+
+Para dar de alta a alguien, desde el editor SQL de Supabase:
+
+```sql
+insert into usuarios_permitidos (user_id, nota)
+select id, 'para qué' from auth.users where email = 'correo@ejemplo.com';
+```
 
 ## Instalarla en el celular
 

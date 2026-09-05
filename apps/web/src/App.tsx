@@ -157,28 +157,30 @@ export default function App() {
               <p className="subtitulo">Lo que se usa de vez en cuando: revisar, corregir, calibrar.</p>
             </div>
 
-            {SECUNDARIAS.map((s) => (
-              <button
-                key={s.id}
-                className="tarjeta"
-                onClick={() => irA(s.id)}
-                style={{ cursor: "pointer", textAlign: "left", font: "inherit", color: "inherit" }}
-              >
-                <span className="fila">
-                  <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: 20 }} aria-hidden="true">
-                      {s.icono}
+            <div className="grilla">
+              {SECUNDARIAS.map((s) => (
+                <button
+                  key={s.id}
+                  className="tarjeta"
+                  onClick={() => irA(s.id)}
+                  style={{ cursor: "pointer", textAlign: "left", font: "inherit", color: "inherit" }}
+                >
+                  <span className="fila">
+                    <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontSize: 20 }} aria-hidden="true">
+                        {s.icono}
+                      </span>
+                      <span>
+                        <strong style={{ fontSize: 15 }}>{s.titulo}</strong>
+                        <br />
+                        <span className="suave">{s.detalle}</span>
+                      </span>
                     </span>
-                    <span>
-                      <strong style={{ fontSize: 15 }}>{s.titulo}</strong>
-                      <br />
-                      <span className="suave">{s.detalle}</span>
-                    </span>
+                    <span className="suave">›</span>
                   </span>
-                  <span className="suave">›</span>
-                </span>
-              </button>
-            ))}
+                </button>
+              ))}
+            </div>
 
             <button className="boton secundario" onClick={() => void supabase.auth.signOut()}>
               Cerrar sesión
