@@ -268,32 +268,34 @@ export function BuscarLanzador() {
           <p className="suave" style={{ marginTop: -8 }}>
             Abridores con 10 salidas o más, ordenados por K%. Es por donde se empieza a buscar un Over.
           </p>
-          {destacados.map((d, i) => (
-            <button
-              key={d.pitcher}
-              onClick={() => elegir(d)}
-              className={`tarjeta ${i < 3 ? "elevada" : ""}`}
-              style={{ cursor: "pointer", textAlign: "left", font: "inherit", color: "inherit" }}
-            >
-              <div className="fila">
-                <span style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span className={i < 3 ? "acento" : "suave"} style={{ fontWeight: 700, width: 20 }}>
-                    {i + 1}
+          <div className="grilla">
+            {destacados.map((d, i) => (
+              <button
+                key={d.pitcher}
+                onClick={() => elegir(d)}
+                className={`tarjeta ${i < 3 ? "elevada" : ""}`}
+                style={{ cursor: "pointer", textAlign: "left", font: "inherit", color: "inherit" }}
+              >
+                <div className="fila">
+                  <span style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <span className={i < 3 ? "acento" : "suave"} style={{ fontWeight: 700, width: 20 }}>
+                      {i + 1}
+                    </span>
+                    <span>
+                      <strong style={{ fontSize: 15 }}>{d.pitcher}</strong>
+                      <br />
+                      <span className="suave">{[d.equipo, d.mano].filter(Boolean).join(" · ")}</span>
+                    </span>
                   </span>
-                  <span>
-                    <strong style={{ fontSize: 15 }}>{d.pitcher}</strong>
+                  <span style={{ textAlign: "right" }}>
+                    <strong style={{ fontSize: 15 }}>{num(d.k_pct, 1)}% K</strong>
                     <br />
-                    <span className="suave">{[d.equipo, d.mano].filter(Boolean).join(" · ")}</span>
+                    <span className="suave">{num(d.k_por_salida, 2)} K por salida</span>
                   </span>
-                </span>
-                <span style={{ textAlign: "right" }}>
-                  <strong style={{ fontSize: 15 }}>{num(d.k_pct, 1)}% K</strong>
-                  <br />
-                  <span className="suave">{num(d.k_por_salida, 2)} K por salida</span>
-                </span>
-              </div>
-            </button>
-          ))}
+                </div>
+              </button>
+            ))}
+          </div>
         </>
       )}
 

@@ -152,6 +152,7 @@ export function Rivales() {
         </Seccion>
       )}
 
+      <div className="grilla">
       {ranking.map((r, i) => {
         const sobrePromedio = r.kRate > promedio;
         const rango = maximo - minimo;
@@ -188,6 +189,7 @@ export function Rivales() {
           </div>
         );
       })}
+      </div>
 
       {!formAbierto ? (
         <Boton secundario alTocar={() => setFormAbierto(true)}>
