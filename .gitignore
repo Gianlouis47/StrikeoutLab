@@ -369,6 +369,12 @@ dist/
 .env
 .env.*
 !.env.example
+# Excepción deliberada: solo trae la URL y la clave PUBLISHABLE de Supabase,
+# que están diseñadas para ir en el navegador y ya viajan dentro del bundle.
+# Vive versionada para que Vercel pueda compilar sin configurar nada a mano.
+# Lo que protege los datos es el RLS (usuarios_permitidos), no esconder esto.
+# La service_role key NUNCA va acá.
+!apps/web/.env.production
 .expo/
 .eas/
 supabase/.temp/
